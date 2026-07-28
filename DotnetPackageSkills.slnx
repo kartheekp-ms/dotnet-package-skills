@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/Contoso.Widgets/Contoso.Widgets.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/DotnetPackageSkills/DotnetPackageSkills.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DotnetPackageSkills.Tests/DotnetPackageSkills.Tests.csproj" />
+  </Folder>
+</Solution>

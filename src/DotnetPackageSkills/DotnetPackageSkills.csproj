@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <AssemblyName>dotnet-package-skills</AssemblyName>
+    <RootNamespace>DotnetPackageSkills</RootNamespace>
+
+    <!-- Roll forward so a net8.0 build still runs on machines that only have a
+         newer runtime installed, which is common on developer machines. -->
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PackAsTool>true</PackAsTool>
+    <!-- The shim name is what makes `dotnet package-skills ...` resolve: the
+         dotnet CLI maps `dotnet <verb>` to an executable named `dotnet-<verb>`. -->
+    <ToolCommandName>dotnet-package-skills</ToolCommandName>
+    <PackageId>dotnet-package-skills</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>dotnet-package-skills contributors</Authors>
+    <Description>Copies agent skills bundled inside NuGet packages out of the global packages folder and into a repository's skills directory, where coding agents can actually find them.</Description>
+    <PackageTags>dotnet-tool;nuget;ai;agent;skills;claude;copilot</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" Version="2.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <InternalsVisibleTo Include="DotnetPackageSkills.Tests" />
+  </ItemGroup>
+
+</Project>

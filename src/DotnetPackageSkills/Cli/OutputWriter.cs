@@ -1,0 +1,128 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using DotnetPackageSkills.Skills;
+
+namespace DotnetPackageSkills.Cli;
+
+/// <summary>Renders results for humans, or as JSON for scripts and agents.</summary>
+public sealed class OutputWriter(TextWriter output)
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    public void WriteJson(object value) => output.WriteLine(JsonSerializer.Serialize(value, JsonOptions));
+
+    /// <param name="copied">
+    /// False for <c>list</c>, which discovers without writing, so the report says "Found"
+    /// rather than claiming files were placed.
+    /// </param>
+    public void WriteSyncReport(SyncResult result, bool copied)
+    {
+        WriteContext(result);
+
+        var verb = result.DryRun
+            ? "Would copy"
+            : copied ? "Copied" : "Found";
+
+        if (result.Skills.Count > 0)
+        {
+            output.WriteLine($"{verb} {Count(result.Skills.Count, "skill")}:");
+
+            foreach (var skill in result.Skills)
+            {
+                output.WriteLine($"  {skill.RelativePath}");
+                output.WriteLine($"      from {skill.PackageId} {skill.PackageVersion}");
+            }
+        }
+        else
+        {
+            output.WriteLine("No bundled skills found. None of the scanned packages ship a skills/ folder.");
+        }
+
+        if (result.Removed.Count > 0)
+        {
+            output.WriteLine();
+            output.WriteLine(
+                $"{(result.DryRun ? "Would remove" : "Removed")} {Count(result.Removed.Count, "skill")} left over from earlier package versions:");
+
+            foreach (var entry in result.Removed)
+            {
+                output.WriteLine($"  {entry.Path}");
+            }
+        }
+
+        WriteNotOnDisk(result);
+
+        if (result.Skills.Count > 0 && copied && !result.DryRun)
+        {
+            output.WriteLine();
+            output.WriteLine(
+                "These skills are instructions written by the package authors, and your coding");
+            output.WriteLine(
+                "agent will follow them. Review them before relying on them.");
+        }
+    }
+
+    private void WriteContext(SyncResult result)
+    {
+        output.WriteLine($"Target:      {result.Target ?? "(packages named on the command line)"}");
+        output.WriteLine($"NuGet cache: {result.GlobalPackagesFolder}");
+        output.WriteLine($"Destination: {result.Destination}");
+
+        var scope = result.Target is null
+            ? "named explicitly"
+            : result.IncludeTransitive ? "top-level and transitive" : "top-level";
+
+        output.WriteLine($"Scanned {Count(result.PackagesScanned, "package")} ({scope}).");
+        output.WriteLine();
+    }
+
+    private void WriteNotOnDisk(SyncResult result)
+    {
+        if (result.NotOnDisk.Count == 0)
+        {
+            return;
+        }
+
+        output.WriteLine();
+        output.WriteLine(
+            $"{Count(result.NotOnDisk.Count, "package")} resolved but not extracted in the NuGet cache. " +
+            "Run 'dotnet restore' and try again:");
+
+        foreach (var package in result.NotOnDisk)
+        {
+            output.WriteLine($"  {package}");
+        }
+    }
+
+    public void WriteUninstallReport(IReadOnlyList<ManifestEntry> removed, string destination, bool dryRun)
+    {
+        output.WriteLine($"Destination: {destination}");
+        output.WriteLine();
+
+        if (removed.Count == 0)
+        {
+            output.WriteLine("Nothing to remove. No skills installed by this tool were found there.");
+            return;
+        }
+
+        output.WriteLine($"{(dryRun ? "Would remove" : "Removed")} {Count(removed.Count, "skill")}:");
+
+        foreach (var entry in removed)
+        {
+            output.WriteLine($"  {entry.Path}");
+            output.WriteLine($"      from {entry.Package} {entry.Version}");
+        }
+    }
+
+    public void WriteError(string message)
+    {
+        Console.Error.WriteLine($"error: {message}");
+    }
+
+    private static string Count(int value, string noun) => $"{value} {noun}{(value == 1 ? string.Empty : "s")}";
+}

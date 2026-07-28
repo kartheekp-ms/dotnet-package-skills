@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Sample library showing how a package author ships an agent skill.
+
+    The only thing that matters for discovery is that the skill files land under
+    `skills/<skill-name>/` in the package. Everything else here is ordinary packaging.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <PackageId>Contoso.Widgets</PackageId>
+    <Version>2.3.0</Version>
+    <Description>Sample package that bundles an agent skill.</Description>
+    <IsPackable>true</IsPackable>
+    <!-- Sample only; never restored from a real feed. -->
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      %(RecursiveDir) is what preserves the folder structure under skills/. Without it
+      every file collapses into a single directory and the skill loses its references.
+    -->
+    <None Include="skills/**/*"
+          Pack="true"
+          PackagePath="skills/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>
