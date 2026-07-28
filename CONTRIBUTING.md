@@ -79,6 +79,13 @@ the only correct answer comes from a project's restore. `PackageCoordinate.Parse
 versions of one package must end up with a skill folder per version; each documents its own
 release. `PackageLister.Parse` keys on the pair for exactly this reason — don't collapse it to id.
 
+**The skill-name folder appears only when a package ships more than one skill.** One skill lands
+directly in `<package>/<version>/`, because a further folder would just repeat the package name.
+Several land in `<package>/<version>/<skill>/`, because otherwise they overwrite each other.
+`SkillDiscovery.Discover` decides this and stores the result on `BundledSkill.RelativePath` — the
+path is set there rather than derived on the record precisely because it depends on the sibling
+count, which only the discovery pass knows.
+
 **Errors should read as guidance.** Throw `PackageSkillsException` with a message that tells the
 user what to do next. `Program.cs` prints it without a stack trace. If a message would leave
 someone stuck, it needs more words.

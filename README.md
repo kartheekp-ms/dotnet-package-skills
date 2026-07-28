@@ -18,7 +18,7 @@ This tool bridges that gap.
 ```
 ~/.nuget/packages/mockly/1.10.0/skills/mockly/SKILL.md     ← where restore puts it
         ↓
-.agents/skills/mockly/1.10.0/mockly/SKILL.md               ← where your agent looks
+.agents/skills/mockly/1.10.0/SKILL.md                      ← where your agent looks
 ```
 
 ## Install
@@ -94,29 +94,40 @@ dotnet package-skills sync --destination .codex/skills
 
 ## What you get
 
+Skills land at `<destination>/<package-id>/<version>/`:
+
 ```
 .agents/skills/
-├── .dotnet-package-skills.json          # what this tool copied in; do not hand-edit
-├── mockly/1.10.0/mockly/
-│   └── SKILL.md
-└── contoso.widgets/2.3.0/widget-usage/
-    ├── SKILL.md
-    └── references/batching.md
+├── .dotnet-package-skills.json     # what this tool copied in; do not hand-edit
+└── mockly/1.10.0/
+    └── SKILL.md
 ```
 
 Package id and version are part of the path deliberately: two packages can ship a skill with the
 same name without colliding, and anyone reading the tree can tell where a skill came from and
 which version it documents.
 
+A package that ships **more than one** skill gets a folder per skill, since they would otherwise
+overwrite each other:
+
+```
+.agents/skills/contoso.widgets/2.3.0/
+├── widget-usage/
+│   ├── SKILL.md
+│   └── references/batching.md
+└── widget-testing/
+    └── SKILL.md
+```
+
 ### Solutions where projects disagree on a version
 
 If two projects in the same solution reference different versions of the same package, you get a
-skill folder for **each version**:
+folder for **each version**:
 
 ```
 .agents/skills/mockly/
-├── 1.10.0/mockly/SKILL.md     # what src/Api references
-└── 1.11.0/mockly/SKILL.md     # what src/Worker references
+├── 1.10.0/SKILL.md     # what src/Api references
+└── 1.11.0/SKILL.md     # what src/Worker references
 ```
 
 Both versions are genuinely in use and each skill documents its own release, so neither can be
@@ -159,7 +170,8 @@ than one skill), and a lone `skills/SKILL.md`, which takes your package id as it
 2. `dotnet nuget locals global-packages --list` — where restore extracted them. `NUGET_PACKAGES`
    and `--global-packages` take precedence, in that order.
 3. For each package, look in `<global-packages>/<id>/<version>/skills/`.
-4. Copy each skill folder to `<destination>/<id>/<version>/<skill>/`.
+4. Copy to `<destination>/<id>/<version>/`, or to `<destination>/<id>/<version>/<skill>/` when the
+   package ships more than one skill.
 
 Nothing inside a skill is read or interpreted. The package author decides what a skill contains;
 this tool only puts it where an agent will look.

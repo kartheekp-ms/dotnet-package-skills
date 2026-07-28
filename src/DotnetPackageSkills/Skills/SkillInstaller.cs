@@ -39,12 +39,16 @@ public sealed class SkillInstaller
             return new InstallOutcome(skills, stale);
         }
 
+        // Remove before copying, never after. A layout change can make a stale path the
+        // ancestor of a path about to be written — <package>/<version>/ becomes
+        // <package>/<version>/<skill>/ the moment a package starts shipping a second skill —
+        // and a recursive delete afterwards would take the freshly copied skills with it.
+        var removed = stale.Where(entry => RemoveSkillDirectory(destinationRoot, entry.Path)).ToList();
+
         foreach (var skill in skills)
         {
             CopyDirectory(skill.SourcePath, ToAbsolute(destinationRoot, skill.RelativePath));
         }
-
-        var removed = stale.Where(entry => RemoveSkillDirectory(destinationRoot, entry.Path)).ToList();
 
         var installed = skills.Select(skill => new ManifestEntry
         {

@@ -3,3 +3,4 @@ obj/
 artifacts/
 *.user
 .DS_Store
+.agents/

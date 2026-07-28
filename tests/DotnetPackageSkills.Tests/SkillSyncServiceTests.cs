@@ -72,8 +72,8 @@ public class SkillSyncServiceTests
         var result = new SkillSyncService(runner).Sync(Request(temp));
 
         Assert.Equal(2, result.PackagesScanned);
-        Assert.Equal("mockly/1.10.0/mockly", Assert.Single(result.Skills).RelativePath);
-        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "1.10.0", "mockly", "SKILL.md")));
+        Assert.Equal("mockly/1.10.0", Assert.Single(result.Skills).RelativePath);
+        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "1.10.0", "SKILL.md")));
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class SkillSyncServiceTests
         var runner = new FakeDotnet(temp.Combine("packages"), Json(("Mockly", "1.10.0")));
         new SkillSyncService(runner).Sync(Request(temp) with { Destination = ".claude/skills" });
 
-        Assert.True(File.Exists(temp.Combine(".claude", "skills", "mockly", "1.10.0", "mockly", "SKILL.md")));
+        Assert.True(File.Exists(temp.Combine(".claude", "skills", "mockly", "1.10.0", "SKILL.md")));
     }
 
     [Fact]
@@ -173,9 +173,9 @@ public class SkillSyncServiceTests
         var upgraded = new SkillSyncService(new FakeDotnet(temp.Combine("packages"), Json(("Mockly", "1.11.0"))));
         var result = upgraded.Sync(Request(temp));
 
-        Assert.Equal("mockly/1.10.0/mockly", Assert.Single(result.Removed).Path);
+        Assert.Equal("mockly/1.10.0", Assert.Single(result.Removed).Path);
         Assert.False(Directory.Exists(temp.Combine(".agents", "skills", "mockly", "1.10.0")));
-        Assert.True(Directory.Exists(temp.Combine(".agents", "skills", "mockly", "1.11.0", "mockly")));
+        Assert.True(Directory.Exists(temp.Combine(".agents", "skills", "mockly", "1.11.0")));
     }
 
     [Fact]
@@ -210,10 +210,10 @@ public class SkillSyncServiceTests
         var result = new SkillSyncService(new FakeDotnet(temp.Combine("packages"), json)).Sync(Request(temp));
 
         Assert.Equal(
-            ["mockly/1.10.0/mockly", "mockly/1.11.0/mockly"],
+            ["mockly/1.10.0", "mockly/1.11.0"],
             result.Skills.Select(s => s.RelativePath).Order());
-        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "1.10.0", "mockly", "SKILL.md")));
-        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "1.11.0", "mockly", "SKILL.md")));
+        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "1.10.0", "SKILL.md")));
+        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "1.11.0", "SKILL.md")));
         Assert.Empty(result.Removed);
     }
 
@@ -229,7 +229,7 @@ public class SkillSyncServiceTests
             Request(temp) with { Packages = [PackageCoordinate.Parse("Mockly@1.10.0")] });
 
         Assert.Null(result.Target);
-        Assert.Equal("mockly/1.10.0/mockly", Assert.Single(result.Skills).RelativePath);
+        Assert.Equal("mockly/1.10.0", Assert.Single(result.Skills).RelativePath);
         Assert.DoesNotContain(runner.Invocations, line => line.StartsWith("list", StringComparison.Ordinal));
     }
 
@@ -249,8 +249,8 @@ public class SkillSyncServiceTests
             Request(temp) with { Packages = [PackageCoordinate.Parse("Contoso.Widgets@2.3.0")] });
 
         Assert.Empty(result.Removed);
-        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "1.10.0", "mockly", "SKILL.md")));
-        Assert.True(File.Exists(temp.Combine(".agents", "skills", "contoso.widgets", "2.3.0", "widget-usage", "SKILL.md")));
+        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "1.10.0", "SKILL.md")));
+        Assert.True(File.Exists(temp.Combine(".agents", "skills", "contoso.widgets", "2.3.0", "SKILL.md")));
     }
 
     [Fact]
@@ -282,7 +282,7 @@ public class SkillSyncServiceTests
         service.Uninstall(".agents/skills", temp.Path, "Mockly", "1.10.0", dryRun: false);
 
         Assert.False(Directory.Exists(temp.Combine(".agents", "skills", "mockly", "1.10.0")));
-        Assert.True(Directory.Exists(temp.Combine(".agents", "skills", "mockly", "1.11.0", "mockly")));
+        Assert.True(Directory.Exists(temp.Combine(".agents", "skills", "mockly", "1.11.0")));
     }
 
     [Fact]

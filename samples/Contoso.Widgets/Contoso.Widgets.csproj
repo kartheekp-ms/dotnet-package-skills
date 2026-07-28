@@ -15,7 +15,12 @@
     <IsPackable>true</IsPackable>
     <!-- Sample only; never restored from a real feed. -->
     <IsPublishable>false</IsPublishable>
+    <MocklySkill>false</MocklySkill>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Mockly" Version="1.10.0" />
+  </ItemGroup>
 
   <ItemGroup>
     <!--
