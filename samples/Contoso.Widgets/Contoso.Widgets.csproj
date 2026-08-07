@@ -3,8 +3,8 @@
   <!--
     Sample library showing how a package author ships an agent skill.
 
-    The only thing that matters for discovery is that the skill files land under
-    `skills/<skill-name>/` in the package. Everything else here is ordinary packaging.
+    Discovery expects each skill at
+    `skills/<lowercased-package-id>-<skill-name>/SKILL.md` in the package.
   -->
 
   <PropertyGroup>

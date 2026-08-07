@@ -1,31 +1,32 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DotnetPackageSkills.NuGet;
 
 namespace DotnetPackageSkills.Skills;
 
-/// <summary>One skill this tool has installed.</summary>
+/// <summary>Skills this tool installed from one package version.</summary>
 public sealed record ManifestEntry
 {
-    [JsonPropertyName("path")]
-    public required string Path { get; init; }
-
     [JsonPropertyName("package")]
     public required string Package { get; init; }
 
     [JsonPropertyName("version")]
     public required string Version { get; init; }
 
-    [JsonPropertyName("skill")]
-    public required string Skill { get; init; }
+    [JsonPropertyName("skills")]
+    public required List<string> Skills { get; init; }
 }
+
+/// <summary>One installed skill with its owning package metadata.</summary>
+public sealed record TrackedSkill(string Package, string Version, string Skill);
 
 /// <summary>
 /// Record of what this tool put in the destination folder.
 /// </summary>
 /// <remarks>
-/// The manifest is what makes removal safe. Pruning and uninstall act only on paths
-/// recorded here, never on whatever happens to be in the destination, so hand-authored
-/// skills living alongside package-provided ones are never at risk.
+/// The manifest is what makes removal safe. Pruning and uninstall act only on skill folder names
+/// recorded under their owning package version, never on whatever happens to be in the
+/// destination, so hand-authored skills living alongside package-provided ones are never at risk.
 /// </remarks>
 public sealed class InstallManifest
 {
@@ -78,11 +79,45 @@ public sealed class InstallManifest
         Directory.CreateDirectory(destinationRoot);
 
         Note = NoteText;
-        Installed = [.. Installed.OrderBy(entry => entry.Path, StringComparer.Ordinal)];
+        SetSkills(EnumerateSkills());
 
         File.WriteAllText(
             System.IO.Path.Combine(destinationRoot, FileName),
             JsonSerializer.Serialize(this, SerializerOptions) + Environment.NewLine);
+    }
+
+    internal IEnumerable<TrackedSkill> EnumerateSkills() =>
+        Installed.SelectMany(entry =>
+            entry.Skills.Select(skill => new TrackedSkill(entry.Package, entry.Version, skill)));
+
+    internal void SetSkills(IEnumerable<TrackedSkill> skills)
+    {
+        Installed =
+        [
+            .. skills
+                .GroupBy(
+                    skill => (
+                        Package: skill.Package.ToLowerInvariant(),
+                        Version: PackagePathResolver.NormalizeVersion(skill.Version)))
+                .Select(group =>
+                {
+                    var first = group.First();
+                    return new ManifestEntry
+                    {
+                        Package = first.Package,
+                        Version = first.Version,
+                        Skills =
+                        [
+                            .. group
+                                .Select(skill => skill.Skill)
+                                .Distinct(StringComparer.OrdinalIgnoreCase)
+                                .OrderBy(skill => skill, StringComparer.Ordinal),
+                        ],
+                    };
+                })
+                .OrderBy(entry => entry.Package, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(entry => entry.Version, StringComparer.Ordinal),
+        ];
     }
 
     public static void Delete(string destinationRoot)

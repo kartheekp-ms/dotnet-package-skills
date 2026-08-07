@@ -15,7 +15,6 @@ public sealed record SyncRequest
 
     public required string Destination { get; init; }
     public required string WorkingDirectory { get; init; }
-    public bool IncludeTransitive { get; init; }
     public bool AllowRestore { get; init; } = true;
     public string? GlobalPackagesOverride { get; init; }
     public bool DryRun { get; init; }
@@ -30,10 +29,10 @@ public sealed record SyncResult
     public required string GlobalPackagesFolder { get; init; }
     public required string Destination { get; init; }
     public required int PackagesScanned { get; init; }
-    public required bool IncludeTransitive { get; init; }
     public required bool DryRun { get; init; }
     public required IReadOnlyList<BundledSkill> Skills { get; init; }
-    public IReadOnlyList<ManifestEntry> Removed { get; init; } = [];
+    public IReadOnlyList<TrackedSkill> Removed { get; init; } = [];
+    public IReadOnlyList<SkippedSkill> Skipped { get; init; } = [];
 
     /// <summary>
     /// Packages that were resolved but are not extracted on disk. Reported rather than treated
@@ -66,25 +65,24 @@ public sealed class SkillSyncService(DotnetCli dotnet, SkillInstaller installer)
         // directory, and a repo-level config is exactly the case worth honouring.
         var globalPackages = LocateGlobalPackages(request, Path.GetDirectoryName(target));
 
-        // Every distinct (id, version) is kept, so a solution whose projects reference
-        // different versions of the same package yields a skill folder per version. Each
-        // version documents itself, and a project on the older one still needs its own.
-        var packages = new PackageLister(dotnet).List(target, request.IncludeTransitive, request.AllowRestore);
+        // Keep every distinct (id, version) long enough to detect unsupported multi-version
+        // collisions explicitly rather than silently selecting one package from the solution.
+        var packages = new PackageLister(dotnet).List(target, request.AllowRestore);
 
-        var (skills, notOnDisk) = Collect(globalPackages, packages.Select(p => (p.Id, p.Version)));
+        var (skills, notOnDisk, skipped) = Collect(globalPackages, packages.Select(p => (p.Id, p.Version)));
 
-        return Build(request, target, globalPackages, packages.Count, skills, notOnDisk);
+        return Build(request, target, globalPackages, packages.Count, skills, notOnDisk, skipped);
     }
 
     private SyncResult DiscoverFromCoordinates(SyncRequest request)
     {
         var globalPackages = LocateGlobalPackages(request, request.WorkingDirectory);
 
-        var (skills, notOnDisk) = Collect(
+        var (skills, notOnDisk, skipped) = Collect(
             globalPackages,
             request.Packages.Select(coordinate => (coordinate.Id, coordinate.Version)));
 
-        return Build(request, target: null, globalPackages, request.Packages.Count, skills, notOnDisk);
+        return Build(request, target: null, globalPackages, request.Packages.Count, skills, notOnDisk, skipped);
     }
 
     private string LocateGlobalPackages(SyncRequest request, string? preferredDirectory) =>
@@ -92,12 +90,14 @@ public sealed class SkillSyncService(DotnetCli dotnet, SkillInstaller installer)
             request.GlobalPackagesOverride,
             preferredDirectory ?? request.WorkingDirectory);
 
-    private static (List<BundledSkill> Skills, List<string> NotOnDisk) Collect(
+    private static (List<BundledSkill> Skills, List<string> NotOnDisk, List<SkippedSkill> Skipped) Collect(
         string globalPackages,
         IEnumerable<(string Id, string Version)> packages)
     {
         var skills = new List<BundledSkill>();
         var notOnDisk = new List<string>();
+        var skipped = new List<SkippedSkill>();
+        var destinations = new Dictionary<string, BundledSkill>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var (id, version) in packages)
         {
@@ -109,10 +109,23 @@ public sealed class SkillSyncService(DotnetCli dotnet, SkillInstaller installer)
                 continue;
             }
 
-            skills.AddRange(SkillDiscovery.Discover(packageDirectory, id, version));
+            foreach (var skill in SkillDiscovery.Discover(packageDirectory, id, version))
+            {
+                if (destinations.TryAdd(skill.RelativePath, skill))
+                {
+                    skills.Add(skill);
+                    continue;
+                }
+
+                var retained = destinations[skill.RelativePath];
+                skipped.Add(ToSkipped(
+                    skill,
+                    $"conflicts with {retained.PackageId} {retained.PackageVersion} skill " +
+                    $"'{retained.SkillName}', which was selected first"));
+            }
         }
 
-        return (skills, notOnDisk);
+        return (skills, notOnDisk, skipped);
     }
 
     private static SyncResult Build(
@@ -121,17 +134,18 @@ public sealed class SkillSyncService(DotnetCli dotnet, SkillInstaller installer)
         string globalPackages,
         int packagesScanned,
         IReadOnlyList<BundledSkill> skills,
-        IReadOnlyList<string> notOnDisk) =>
+        IReadOnlyList<string> notOnDisk,
+        IReadOnlyList<SkippedSkill> skipped) =>
         new()
         {
             Target = target,
             GlobalPackagesFolder = globalPackages,
             Destination = Path.GetFullPath(request.Destination, request.WorkingDirectory),
             PackagesScanned = packagesScanned,
-            IncludeTransitive = request.IncludeTransitive,
             DryRun = request.DryRun,
             Skills = skills,
             NotOnDisk = notOnDisk,
+            Skipped = skipped,
         };
 
     /// <summary>Discovers bundled skills and copies them into the destination.</summary>
@@ -148,13 +162,18 @@ public sealed class SkillSyncService(DotnetCli dotnet, SkillInstaller installer)
             request.DryRun,
             prune: request.Packages.Count == 0);
 
-        return discovered with { Removed = outcome.Removed };
+        return discovered with
+        {
+            Skills = outcome.Installed,
+            Removed = outcome.Removed,
+            Skipped = [.. discovered.Skipped, .. outcome.Skipped],
+        };
     }
 
     /// <summary>
     /// Removes skills this tool installed, optionally limited to one package or one exact version.
     /// </summary>
-    public IReadOnlyList<ManifestEntry> Uninstall(
+    public IReadOnlyList<TrackedSkill> Uninstall(
         string destination,
         string workingDirectory,
         string? packageId,
@@ -164,4 +183,12 @@ public sealed class SkillSyncService(DotnetCli dotnet, SkillInstaller installer)
         var root = Path.GetFullPath(destination, workingDirectory);
         return installer.Uninstall(root, packageId, packageVersion, dryRun);
     }
+
+    private static SkippedSkill ToSkipped(BundledSkill skill, string reason) =>
+        new(
+            skill.RelativePath,
+            skill.PackageId,
+            skill.PackageVersion,
+            skill.SkillName,
+            reason);
 }

@@ -1,5 +1,6 @@
 using DotnetPackageSkills.Infrastructure;
 using DotnetPackageSkills.NuGet;
+using DotnetPackageSkills.Skills;
 
 namespace DotnetPackageSkills.Tests;
 
@@ -58,6 +59,7 @@ public class SkillSyncServiceTests
     {
         Destination = ".agents/skills",
         WorkingDirectory = temp.Path,
+        GlobalPackagesOverride = temp.Combine("packages"),
     };
 
     [Fact]
@@ -72,8 +74,8 @@ public class SkillSyncServiceTests
         var result = new SkillSyncService(runner).Sync(Request(temp));
 
         Assert.Equal(2, result.PackagesScanned);
-        Assert.Equal("mockly/1.10.0", Assert.Single(result.Skills).RelativePath);
-        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "1.10.0", "SKILL.md")));
+        Assert.Equal("mockly", Assert.Single(result.Skills).RelativePath);
+        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "SKILL.md")));
     }
 
     [Fact]
@@ -113,7 +115,7 @@ public class SkillSyncServiceTests
         var runner = new FakeDotnet(temp.Combine("packages"), Json(("Mockly", "1.10.0")));
         new SkillSyncService(runner).Sync(Request(temp) with { Destination = ".claude/skills" });
 
-        Assert.True(File.Exists(temp.Combine(".claude", "skills", "mockly", "1.10.0", "SKILL.md")));
+        Assert.True(File.Exists(temp.Combine(".claude", "skills", "mockly", "SKILL.md")));
     }
 
     [Fact]
@@ -131,16 +133,16 @@ public class SkillSyncServiceTests
     }
 
     [Fact]
-    public void Sync_asks_for_transitive_packages_only_when_requested()
+    public void Sync_never_requests_transitive_packages()
     {
         using var temp = new TempDirectory();
         temp.CreateFile("MyApp.sln");
         temp.CreateDirectory("packages");
 
         var runner = new FakeDotnet(temp.Combine("packages"), Json());
-        new SkillSyncService(runner).Sync(Request(temp) with { IncludeTransitive = true });
+        new SkillSyncService(runner).Sync(Request(temp));
 
-        Assert.Contains(runner.Invocations, line => line.Contains("--include-transitive"));
+        Assert.DoesNotContain(runner.Invocations, line => line.Contains("--include-transitive"));
     }
 
     [Fact]
@@ -173,21 +175,21 @@ public class SkillSyncServiceTests
         var upgraded = new SkillSyncService(new FakeDotnet(temp.Combine("packages"), Json(("Mockly", "1.11.0"))));
         var result = upgraded.Sync(Request(temp));
 
-        Assert.Equal("mockly/1.10.0", Assert.Single(result.Removed).Path);
-        Assert.False(Directory.Exists(temp.Combine(".agents", "skills", "mockly", "1.10.0")));
-        Assert.True(Directory.Exists(temp.Combine(".agents", "skills", "mockly", "1.11.0")));
+        Assert.Empty(result.Removed);
+        Assert.True(Directory.Exists(temp.Combine(".agents", "skills", "mockly")));
+        Assert.Equal(
+            "1.11.0",
+            Assert.Single(InstallManifest.Load(temp.Combine(".agents", "skills")).Installed).Version);
     }
 
     [Fact]
-    public void A_solution_whose_projects_disagree_on_a_version_gets_a_folder_per_version()
+    public void A_solution_whose_projects_disagree_on_a_version_keeps_the_first_and_warns()
     {
         using var temp = new TempDirectory();
         temp.CreateFile("MyApp.sln");
         temp.CreatePackageWithSkill("Mockly", "1.10.0", "mockly");
         temp.CreatePackageWithSkill("Mockly", "1.11.0", "mockly");
 
-        // Two projects in one solution, each pinned to a different version of the same
-        // package. Both are legitimately in use, so both skills have to be available.
         const string json = """
             {
               "projects": [
@@ -209,12 +211,28 @@ public class SkillSyncServiceTests
 
         var result = new SkillSyncService(new FakeDotnet(temp.Combine("packages"), json)).Sync(Request(temp));
 
-        Assert.Equal(
-            ["mockly/1.10.0", "mockly/1.11.0"],
-            result.Skills.Select(s => s.RelativePath).Order());
-        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "1.10.0", "SKILL.md")));
-        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "1.11.0", "SKILL.md")));
+        Assert.Equal("1.10.0", Assert.Single(result.Skills).PackageVersion);
+        Assert.Equal("1.11.0", Assert.Single(result.Skipped).PackageVersion);
+        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "SKILL.md")));
         Assert.Empty(result.Removed);
+    }
+
+    [Fact]
+    public void Skills_from_different_packages_that_share_a_name_keep_the_first_and_warn()
+    {
+        using var temp = new TempDirectory();
+        temp.CreateFile("MyApp.sln");
+        temp.CreatePackageWithSkill("Alpha.Widgets", "1.0.0", "shared-skill");
+        temp.CreatePackageWithSkill("Beta.Widgets", "1.0.0", "SHARED-SKILL");
+
+        var runner = new FakeDotnet(
+            temp.Combine("packages"),
+            Json(("Beta.Widgets", "1.0.0"), ("Alpha.Widgets", "1.0.0")));
+        var result = new SkillSyncService(runner).Sync(Request(temp));
+
+        Assert.Equal("Alpha.Widgets", Assert.Single(result.Skills).PackageId);
+        Assert.Equal("Beta.Widgets", Assert.Single(result.Skipped).PackageId);
+        Assert.True(File.Exists(temp.Combine(".agents", "skills", "shared-skill", "SKILL.md")));
     }
 
     [Fact]
@@ -229,7 +247,7 @@ public class SkillSyncServiceTests
             Request(temp) with { Packages = [PackageCoordinate.Parse("Mockly@1.10.0")] });
 
         Assert.Null(result.Target);
-        Assert.Equal("mockly/1.10.0", Assert.Single(result.Skills).RelativePath);
+        Assert.Equal("mockly", Assert.Single(result.Skills).RelativePath);
         Assert.DoesNotContain(runner.Invocations, line => line.StartsWith("list", StringComparison.Ordinal));
     }
 
@@ -249,8 +267,8 @@ public class SkillSyncServiceTests
             Request(temp) with { Packages = [PackageCoordinate.Parse("Contoso.Widgets@2.3.0")] });
 
         Assert.Empty(result.Removed);
-        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "1.10.0", "SKILL.md")));
-        Assert.True(File.Exists(temp.Combine(".agents", "skills", "contoso.widgets", "2.3.0", "SKILL.md")));
+        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "SKILL.md")));
+        Assert.True(File.Exists(temp.Combine(".agents", "skills", "widget-usage", "SKILL.md")));
     }
 
     [Fact]
@@ -267,22 +285,20 @@ public class SkillSyncServiceTests
     }
 
     [Fact]
-    public void Uninstall_can_target_one_version_of_a_package()
+    public void Uninstall_version_filter_leaves_another_version_installed()
     {
         using var temp = new TempDirectory();
-        temp.CreatePackageWithSkill("Mockly", "1.10.0", "mockly");
         temp.CreatePackageWithSkill("Mockly", "1.11.0", "mockly");
 
         var service = new SkillSyncService(new FakeDotnet(temp.Combine("packages"), Json()));
         service.Sync(Request(temp) with
         {
-            Packages = [PackageCoordinate.Parse("Mockly@1.10.0"), PackageCoordinate.Parse("Mockly@1.11.0")],
+            Packages = [PackageCoordinate.Parse("Mockly@1.11.0")],
         });
 
         service.Uninstall(".agents/skills", temp.Path, "Mockly", "1.10.0", dryRun: false);
 
-        Assert.False(Directory.Exists(temp.Combine(".agents", "skills", "mockly", "1.10.0")));
-        Assert.True(Directory.Exists(temp.Combine(".agents", "skills", "mockly", "1.11.0")));
+        Assert.True(Directory.Exists(temp.Combine(".agents", "skills", "mockly")));
     }
 
     [Fact]

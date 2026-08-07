@@ -55,8 +55,9 @@ restore treat a cached package as corrupt, and removes the skill from every othe
 that package.
 
 **Removal is driven by the manifest, never by scanning the destination.** `.dotnet-package-skills.json`
-records what this tool copied in; pruning and `uninstall` act only on those paths. Users keep their
-own hand-written skills in the same folder, and deleting one of those would be unforgivable.
+groups copied skill folder names under their package id and version; pruning and `uninstall` act
+only on those names. Users keep their own hand-written skills in the same folder, and deleting one
+of those would be unforgivable.
 
 **Don't read or interpret skill contents.** The tool identifies skill folders by structure and
 copies them. What a skill contains is the package author's business. An earlier version parsed
@@ -75,16 +76,26 @@ they synced a single package.
 **`--package` refuses floating versions and ranges.** Resolving one means choosing a version, and
 the only correct answer comes from a project's restore. `PackageCoordinate.Parse` is the gate.
 
-**Every distinct (id, version) gets its own folder.** A solution whose projects reference different
-versions of one package must end up with a skill folder per version; each documents its own
-release. `PackageLister.Parse` keys on the pair for exactly this reason — don't collapse it to id.
+**Only direct dependencies are scanned.** Applications code against their direct package
+references, not implementation details brought in transitively. Do not add `--include-transitive`
+or parse `transitivePackages` without revisiting that product decision.
 
-**The skill-name folder appears only when a package ships more than one skill.** One skill lands
-directly in `<package>/<version>/`, because a further folder would just repeat the package name.
-Several land in `<package>/<version>/<skill>/`, because otherwise they overwrite each other.
-`SkillDiscovery.Discover` decides this and stores the result on `BundledSkill.RelativePath` — the
-path is set there rather than derived on the record precisely because it depends on the sibling
-count, which only the discovery pass knows.
+**The authored skill folder name is the destination folder name.** A package skill at
+`skills/contoso.widgets-widget-usage/` lands at
+`<destination>/contoso.widgets-widget-usage/`. Package and version remain manifest metadata; they
+do not create destination path segments. A skill must be an immediate subdirectory containing
+`SKILL.md`; a lone `skills/SKILL.md` is intentionally unsupported.
+
+**Collisions warn and skip; they never overwrite silently.** Destination names compare
+case-insensitively. Package enumeration and skill discovery stay deterministic so the first match
+wins reproducibly. An existing untracked destination folder is user-owned and untouchable.
+Package authors avoid collisions by prefixing skill folders with their lowercased package ID, but
+the tool does not enforce that naming convention.
+
+**Side-by-side package versions are not represented in the destination.** Repositories are expected
+to align package versions with NuGet Central Package Management. `PackageLister.Parse` still keeps
+distinct `(id, version)` pairs so multiple versions produce a visible collision warning instead of
+a silent overwrite.
 
 **Errors should read as guidance.** Throw `PackageSkillsException` with a message that tells the
 user what to do next. `Program.cs` prints it without a stack trace. If a message would leave
@@ -100,7 +111,7 @@ Name tests as a sentence describing the behaviour, not the method under test:
 
 ```csharp
 [Fact]
-public void Sync_removes_the_previous_version_when_a_package_is_upgraded()
+public void Sync_skips_a_later_skill_when_destination_names_collide()
 ```
 
 New behaviour needs a test. Bug fixes need a test that fails without the fix — the `.slnx`

@@ -6,37 +6,31 @@ public class SkillInstallerTests
 {
     private readonly SkillInstaller _installer = new();
 
-    /// <summary>
-    /// Builds a skill whose destination is the single-skill layout, <c>package/version/</c>.
-    /// Pass <paramref name="nested"/> to get the multi-skill layout instead.
-    /// </summary>
     private static BundledSkill Skill(
         TempDirectory temp,
         string packageId,
         string version,
-        string skillName,
-        bool nested = false)
+        string skillName)
     {
         var packageDirectory = temp.CreatePackageWithSkill(packageId, version, skillName);
-        var root = $"{packageId.ToLowerInvariant()}/{version}";
 
         return new BundledSkill(
             packageId,
             version,
             skillName,
             Path.Combine(packageDirectory, "skills", skillName),
-            nested ? $"{root}/{skillName}" : root);
+            skillName);
     }
 
     [Fact]
-    public void Install_copies_a_skill_to_package_version_skill()
+    public void Install_copies_a_skill_to_its_authored_folder_name()
     {
         using var temp = new TempDirectory();
         var destination = temp.Combine("dest");
 
         _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly")], dryRun: false);
 
-        Assert.True(File.Exists(Path.Combine(destination, "mockly", "1.10.0", "SKILL.md")));
+        Assert.True(File.Exists(Path.Combine(destination, "mockly", "SKILL.md")));
     }
 
     [Fact]
@@ -50,7 +44,34 @@ public class SkillInstallerTests
 
         Assert.Equal(
             "rules",
-            File.ReadAllText(temp.Combine("dest", "contoso.widgets", "2.3.0", "references", "batching.md")));
+            File.ReadAllText(temp.Combine("dest", "widget-usage", "references", "batching.md")));
+    }
+
+    [Fact]
+    public void Manifest_groups_skill_names_by_package_and_version()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+
+        _installer.Install(
+            destination,
+            [
+                Skill(temp, "Contoso.Widgets", "2.3.0", "contoso.widgets-widget-testing"),
+                Skill(temp, "Contoso.Widgets", "2.3.0", "contoso.widgets-widget-usage"),
+                Skill(temp, "Mockly", "1.10.0", "mockly"),
+            ],
+            dryRun: false);
+
+        var manifest = InstallManifest.Load(destination);
+        var contoso = Assert.Single(manifest.Installed, entry => entry.Package == "Contoso.Widgets");
+        Assert.Equal(
+            ["contoso.widgets-widget-testing", "contoso.widgets-widget-usage"],
+            contoso.Skills);
+
+        var json = File.ReadAllText(Path.Combine(destination, InstallManifest.FileName));
+        Assert.Contains("\"skills\":", json);
+        Assert.DoesNotContain("\"path\":", json);
+        Assert.DoesNotContain("\"skill\":", json);
     }
 
     [Fact]
@@ -74,9 +95,9 @@ public class SkillInstallerTests
         _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly")], dryRun: false);
         var outcome = _installer.Install(destination, [Skill(temp, "Mockly", "1.11.0", "mockly")], dryRun: false);
 
-        Assert.False(Directory.Exists(Path.Combine(destination, "mockly", "1.10.0")));
-        Assert.True(Directory.Exists(Path.Combine(destination, "mockly", "1.11.0")));
-        Assert.Equal("mockly/1.10.0", Assert.Single(outcome.Removed).Path);
+        Assert.True(Directory.Exists(Path.Combine(destination, "mockly")));
+        Assert.Empty(outcome.Removed);
+        Assert.Equal("1.11.0", Assert.Single(InstallManifest.Load(destination).Installed).Version);
     }
 
     [Fact]
@@ -92,57 +113,44 @@ public class SkillInstallerTests
 
         _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly")], dryRun: false);
 
-        Assert.False(Directory.Exists(Path.Combine(destination, "contoso.widgets")));
+        Assert.False(Directory.Exists(Path.Combine(destination, "widget-usage")));
     }
 
     [Fact]
-    public void Install_survives_a_package_gaining_a_second_skill_at_the_same_version()
+    public void Install_keeps_the_first_skill_when_destination_names_collide()
     {
         using var temp = new TempDirectory();
         var destination = temp.Combine("dest");
 
-        // One skill installs flat, at mockly/1.10.0/.
-        _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly")], dryRun: false);
-
-        // The same version now ships two, so both nest one level deeper. The stale entry is
-        // now the *parent* of what is being written, so removing it after copying would
-        // delete the new skills.
         var outcome = _installer.Install(
             destination,
             [
-                Skill(temp, "Mockly", "1.10.0", "mockly", nested: true),
-                Skill(temp, "Mockly", "1.10.0", "sub-skill", nested: true),
+                Skill(temp, "Mockly", "1.10.0", "shared-skill"),
+                Skill(temp, "Contoso.Widgets", "2.3.0", "shared-skill"),
             ],
             dryRun: false);
 
-        Assert.True(File.Exists(Path.Combine(destination, "mockly", "1.10.0", "mockly", "SKILL.md")));
-        Assert.True(File.Exists(Path.Combine(destination, "mockly", "1.10.0", "sub-skill", "SKILL.md")));
-
-        // The old flat copy at mockly/1.10.0/SKILL.md must not survive alongside them.
-        Assert.False(File.Exists(Path.Combine(destination, "mockly", "1.10.0", "SKILL.md")));
-        Assert.Equal("mockly/1.10.0", Assert.Single(outcome.Removed).Path);
+        Assert.Equal("Mockly", Assert.Single(outcome.Installed).PackageId);
+        Assert.Equal("Contoso.Widgets", Assert.Single(outcome.Skipped).PackageId);
+        Assert.True(File.Exists(Path.Combine(destination, "shared-skill", "SKILL.md")));
     }
 
     [Fact]
-    public void Install_survives_a_package_dropping_back_to_a_single_skill()
+    public void Install_detects_destination_collisions_case_insensitively()
     {
         using var temp = new TempDirectory();
         var destination = temp.Combine("dest");
 
-        _installer.Install(
+        var outcome = _installer.Install(
             destination,
             [
-                Skill(temp, "Mockly", "1.10.0", "mockly", nested: true),
-                Skill(temp, "Mockly", "1.10.0", "sub-skill", nested: true),
+                Skill(temp, "Mockly", "1.10.0", "shared-skill"),
+                Skill(temp, "Contoso.Widgets", "2.3.0", "SHARED-SKILL"),
             ],
             dryRun: false);
 
-        // Back to one skill, so it goes flat again and the nested folders must be gone.
-        _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly")], dryRun: false);
-
-        Assert.True(File.Exists(Path.Combine(destination, "mockly", "1.10.0", "SKILL.md")));
-        Assert.False(Directory.Exists(Path.Combine(destination, "mockly", "1.10.0", "sub-skill")));
-        Assert.False(Directory.Exists(Path.Combine(destination, "mockly", "1.10.0", "mockly")));
+        Assert.Single(outcome.Installed);
+        Assert.Single(outcome.Skipped);
     }
 
     [Fact]
@@ -165,6 +173,80 @@ public class SkillInstallerTests
     }
 
     [Fact]
+    public void Install_skips_an_existing_untracked_destination_folder()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.CreateDirectory("dest");
+        var existing = temp.CreateFile("dest/mockly/SKILL.md", "ours");
+
+        var outcome = _installer.Install(
+            destination,
+            [Skill(temp, "Mockly", "1.10.0", "mockly")],
+            dryRun: false);
+
+        Assert.Empty(outcome.Installed);
+        Assert.Single(outcome.Skipped);
+        Assert.Equal("ours", File.ReadAllText(existing));
+    }
+
+    [Fact]
+    public void Install_skips_an_existing_file_at_the_destination_path()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.CreateDirectory("dest");
+        var existing = temp.CreateFile("dest/mockly", "ours");
+
+        var outcome = _installer.Install(
+            destination,
+            [Skill(temp, "Mockly", "1.10.0", "mockly")],
+            dryRun: false);
+
+        Assert.Empty(outcome.Installed);
+        Assert.Single(outcome.Skipped);
+        Assert.Equal("ours", File.ReadAllText(existing));
+    }
+
+    [Fact]
+    public void Additive_install_skips_a_path_tracked_for_another_package()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(
+            destination,
+            [Skill(temp, "Contoso.Widgets", "2.3.0", "shared-skill")],
+            dryRun: false);
+
+        var outcome = _installer.Install(
+            destination,
+            [Skill(temp, "Mockly", "1.10.0", "shared-skill")],
+            dryRun: false,
+            prune: false);
+
+        Assert.Empty(outcome.Installed);
+        Assert.Single(outcome.Skipped);
+        Assert.Equal("Contoso.Widgets", Assert.Single(InstallManifest.Load(destination).Installed).Package);
+    }
+
+    [Fact]
+    public void Complete_install_can_transfer_a_path_to_the_selected_package()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(
+            destination,
+            [Skill(temp, "Contoso.Widgets", "2.3.0", "shared-skill")],
+            dryRun: false);
+
+        var outcome = _installer.Install(
+            destination,
+            [Skill(temp, "Mockly", "1.10.0", "shared-skill")],
+            dryRun: false);
+
+        Assert.Empty(outcome.Skipped);
+        Assert.Equal("Mockly", Assert.Single(InstallManifest.Load(destination).Installed).Package);
+    }
+
+    [Fact]
     public void Install_replaces_files_that_a_newer_package_version_dropped()
     {
         using var temp = new TempDirectory();
@@ -179,7 +261,7 @@ public class SkillInstallerTests
         File.Delete(Path.Combine(first.SourcePath, "obsolete.md"));
         _installer.Install(destination, [first], dryRun: false);
 
-        Assert.False(File.Exists(Path.Combine(destination, "mockly", "1.10.0", "obsolete.md")));
+        Assert.False(File.Exists(Path.Combine(destination, "mockly", "obsolete.md")));
     }
 
     [Fact]
@@ -196,7 +278,7 @@ public class SkillInstallerTests
         {
             _installer.Install(destination, [skill], dryRun: false);
 
-            var copied = Path.Combine(destination, "mockly", "1.10.0", "SKILL.md");
+            var copied = Path.Combine(destination, "mockly", "SKILL.md");
             Assert.False(File.GetAttributes(copied).HasFlag(FileAttributes.ReadOnly));
 
             // The real point: a second sync must be able to overwrite the copy.
@@ -234,7 +316,7 @@ public class SkillInstallerTests
         _installer.Uninstall(destination, packageId: "mockly", packageVersion: null, dryRun: false);
 
         Assert.False(Directory.Exists(Path.Combine(destination, "mockly")));
-        Assert.True(Directory.Exists(Path.Combine(destination, "contoso.widgets", "2.3.0")));
+        Assert.True(Directory.Exists(Path.Combine(destination, "widget-usage")));
         Assert.True(File.Exists(Path.Combine(destination, InstallManifest.FileName)));
     }
 
@@ -248,7 +330,7 @@ public class SkillInstallerTests
         var removed = _installer.Uninstall(destination, packageId: null, packageVersion: null, dryRun: true);
 
         Assert.Single(removed);
-        Assert.True(Directory.Exists(Path.Combine(destination, "mockly", "1.10.0")));
+        Assert.True(Directory.Exists(Path.Combine(destination, "mockly")));
     }
 
     [Fact]
@@ -284,6 +366,6 @@ public class SkillInstallerTests
 
         _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly")], dryRun: false);
 
-        Assert.True(File.Exists(Path.Combine(destination, "mockly", "1.10.0", "SKILL.md")));
+        Assert.True(File.Exists(Path.Combine(destination, "mockly", "SKILL.md")));
     }
 }

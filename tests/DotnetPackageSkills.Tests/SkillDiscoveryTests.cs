@@ -5,28 +5,26 @@ namespace DotnetPackageSkills.Tests;
 public class SkillDiscoveryTests
 {
     [Fact]
-    public void A_package_with_one_skill_lands_directly_in_package_and_version()
+    public void A_package_with_one_skill_uses_its_authored_folder_name_as_the_destination()
     {
         using var temp = new TempDirectory();
-        var package = temp.CreatePackageWithSkill("Mockly", "1.10.0", "mockly");
+        var package = temp.CreatePackageWithSkill("Mockly", "1.10.0", "mockly-usage");
 
         var skill = Assert.Single(SkillDiscovery.Discover(package, "Mockly", "1.10.0"));
 
-        // No further folder: it would only repeat the package name.
-        Assert.Equal("mockly/1.10.0", skill.RelativePath);
+        Assert.Equal("mockly-usage", skill.RelativePath);
     }
 
     [Fact]
-    public void A_package_with_several_skills_gives_each_its_own_folder()
+    public void A_package_with_several_skills_keeps_each_authored_folder_name()
     {
         using var temp = new TempDirectory();
         var package = temp.CreatePackageWithSkill("Contoso.Widgets", "2.3.0", "widget-usage", "widget-testing");
 
         var skills = SkillDiscovery.Discover(package, "Contoso.Widgets", "2.3.0");
 
-        // Flat would put two SKILL.md files in one folder, so here the name has to stay.
         Assert.Equal(
-            ["contoso.widgets/2.3.0/widget-testing", "contoso.widgets/2.3.0/widget-usage"],
+            ["widget-testing", "widget-usage"],
             skills.Select(s => s.RelativePath));
     }
 
@@ -42,14 +40,15 @@ public class SkillDiscoveryTests
     }
 
     [Fact]
-    public void Discover_normalizes_the_version_in_the_destination_path()
+    public void Discover_keeps_package_version_as_metadata_only()
     {
         using var temp = new TempDirectory();
         var package = temp.CreatePackageWithSkill("Widgets", "2.0", "usage");
 
         var skill = Assert.Single(SkillDiscovery.Discover(package, "Widgets", "2.0"));
 
-        Assert.Equal("widgets/2.0.0", skill.RelativePath);
+        Assert.Equal("2.0", skill.PackageVersion);
+        Assert.Equal("usage", skill.RelativePath);
     }
 
     [Fact]
@@ -63,17 +62,23 @@ public class SkillDiscoveryTests
     }
 
     [Fact]
-    public void Discover_accepts_a_single_skill_placed_directly_in_the_skills_folder()
+    public void Discover_ignores_a_skill_placed_directly_in_the_skills_folder()
     {
         using var temp = new TempDirectory();
         var package = temp.CreateDirectory("packages", "widgets", "1.0.0");
         temp.CreateFile("packages/widgets/1.0.0/skills/SKILL.md", "---\nname: widgets\n---\n");
 
-        var skill = Assert.Single(SkillDiscovery.Discover(package, "Widgets", "1.0.0"));
+        Assert.Empty(SkillDiscovery.Discover(package, "Widgets", "1.0.0"));
+    }
 
-        // With no folder of its own the skill takes the package id as its name.
-        Assert.Equal("widgets", skill.SkillName);
-        Assert.Equal("widgets/1.0.0", skill.RelativePath);
+    [Fact]
+    public void Discover_ignores_subdirectories_without_a_skill_manifest()
+    {
+        using var temp = new TempDirectory();
+        var package = temp.CreateDirectory("packages", "widgets", "1.0.0");
+        temp.CreateFile("packages/widgets/1.0.0/skills/notes/readme.md", "not a skill");
+
+        Assert.Empty(SkillDiscovery.Discover(package, "Widgets", "1.0.0"));
     }
 
     [Fact]
