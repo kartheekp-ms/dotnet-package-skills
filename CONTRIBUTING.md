@@ -55,8 +55,9 @@ restore treat a cached package as corrupt, and removes the skill from every othe
 that package.
 
 **Removal is driven by the manifest, never by scanning the destination.** `.dotnet-package-skills.json`
-records what this tool copied in; pruning and `uninstall` act only on those paths. Users keep their
-own hand-written skills in the same folder, and deleting one of those would be unforgivable.
+groups copied skill folder names under their package id and version; pruning and `uninstall` act
+only on those names. Users keep their own hand-written skills in the same folder, and deleting one
+of those would be unforgivable.
 
 **Don't read or interpret skill contents.** The tool identifies skill folders by structure and
 copies them. What a skill contains is the package author's business. An earlier version parsed

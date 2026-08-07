@@ -110,6 +110,23 @@ Each authored skill folder lands directly under the destination:
 The tool preserves the skill folder name from the package. Package id and version remain in the
 install manifest for attribution and uninstall filtering, but they are not added to the path.
 
+The manifest groups the copied skill folder names by package and version:
+
+```json
+{
+  "installed": [
+    {
+      "package": "Contoso.Widgets",
+      "version": "2.3.0",
+      "skills": [
+        "contoso.widgets-widget-testing",
+        "contoso.widgets-widget-usage"
+      ]
+    }
+  ]
+}
+```
+
 Package authors should prefix every folder with their lowercased package id, as shown above. This
 keeps names globally unique when skills from many packages share one destination. The convention is
 documented rather than enforced, so existing safe names still work.

@@ -31,7 +31,7 @@ public sealed record SyncResult
     public required int PackagesScanned { get; init; }
     public required bool DryRun { get; init; }
     public required IReadOnlyList<BundledSkill> Skills { get; init; }
-    public IReadOnlyList<ManifestEntry> Removed { get; init; } = [];
+    public IReadOnlyList<TrackedSkill> Removed { get; init; } = [];
     public IReadOnlyList<SkippedSkill> Skipped { get; init; } = [];
 
     /// <summary>
@@ -173,7 +173,7 @@ public sealed class SkillSyncService(DotnetCli dotnet, SkillInstaller installer)
     /// <summary>
     /// Removes skills this tool installed, optionally limited to one package or one exact version.
     /// </summary>
-    public IReadOnlyList<ManifestEntry> Uninstall(
+    public IReadOnlyList<TrackedSkill> Uninstall(
         string destination,
         string workingDirectory,
         string? packageId,

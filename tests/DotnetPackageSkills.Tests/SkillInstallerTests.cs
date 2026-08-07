@@ -48,6 +48,33 @@ public class SkillInstallerTests
     }
 
     [Fact]
+    public void Manifest_groups_skill_names_by_package_and_version()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+
+        _installer.Install(
+            destination,
+            [
+                Skill(temp, "Contoso.Widgets", "2.3.0", "contoso.widgets-widget-testing"),
+                Skill(temp, "Contoso.Widgets", "2.3.0", "contoso.widgets-widget-usage"),
+                Skill(temp, "Mockly", "1.10.0", "mockly"),
+            ],
+            dryRun: false);
+
+        var manifest = InstallManifest.Load(destination);
+        var contoso = Assert.Single(manifest.Installed, entry => entry.Package == "Contoso.Widgets");
+        Assert.Equal(
+            ["contoso.widgets-widget-testing", "contoso.widgets-widget-usage"],
+            contoso.Skills);
+
+        var json = File.ReadAllText(Path.Combine(destination, InstallManifest.FileName));
+        Assert.Contains("\"skills\":", json);
+        Assert.DoesNotContain("\"path\":", json);
+        Assert.DoesNotContain("\"skill\":", json);
+    }
+
+    [Fact]
     public void Install_with_dryRun_writes_nothing()
     {
         using var temp = new TempDirectory();

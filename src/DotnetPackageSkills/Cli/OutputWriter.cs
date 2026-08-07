@@ -51,7 +51,7 @@ public sealed class OutputWriter(TextWriter output)
 
             foreach (var entry in result.Removed)
             {
-                output.WriteLine($"  {entry.Path}");
+                output.WriteLine($"  {entry.Skill}");
             }
         }
 
@@ -116,7 +116,7 @@ public sealed class OutputWriter(TextWriter output)
         }
     }
 
-    public void WriteUninstallReport(IReadOnlyList<ManifestEntry> removed, string destination, bool dryRun)
+    public void WriteUninstallReport(IReadOnlyList<TrackedSkill> removed, string destination, bool dryRun)
     {
         output.WriteLine($"Destination: {destination}");
         output.WriteLine();
@@ -131,7 +131,7 @@ public sealed class OutputWriter(TextWriter output)
 
         foreach (var entry in removed)
         {
-            output.WriteLine($"  {entry.Path}");
+            output.WriteLine($"  {entry.Skill}");
             output.WriteLine($"      from {entry.Package} {entry.Version}");
         }
     }
