@@ -168,12 +168,6 @@ other packages on the consumer's machine.
 
 A complete working example is in [`samples/Contoso.Widgets`](samples/Contoso.Widgets).
 
-Verify what you shipped before publishing — the package is just a zip:
-
-```bash
-unzip -l bin/Release/Contoso.Widgets.2.3.0.nupkg | grep skills
-```
-
 Every skill must have its own immediate subdirectory under `skills/`; a lone `skills/SKILL.md` is
 not discovered.
 
