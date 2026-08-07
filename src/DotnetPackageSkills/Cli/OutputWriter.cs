@@ -47,7 +47,7 @@ public sealed class OutputWriter(TextWriter output)
         {
             output.WriteLine();
             output.WriteLine(
-                $"{(result.DryRun ? "Would remove" : "Removed")} {Count(result.Removed.Count, "skill")} left over from earlier package versions:");
+                $"{(result.DryRun ? "Would remove" : "Removed")} {Count(result.Removed.Count, "stale skill")}:");
 
             foreach (var entry in result.Removed)
             {
@@ -55,6 +55,7 @@ public sealed class OutputWriter(TextWriter output)
             }
         }
 
+        WriteSkipped(result);
         WriteNotOnDisk(result);
 
         if (result.Skills.Count > 0 && copied && !result.DryRun)
@@ -73,12 +74,28 @@ public sealed class OutputWriter(TextWriter output)
         output.WriteLine($"NuGet cache: {result.GlobalPackagesFolder}");
         output.WriteLine($"Destination: {result.Destination}");
 
-        var scope = result.Target is null
-            ? "named explicitly"
-            : result.IncludeTransitive ? "top-level and transitive" : "top-level";
+        var scope = result.Target is null ? "named explicitly" : "direct";
 
         output.WriteLine($"Scanned {Count(result.PackagesScanned, "package")} ({scope}).");
         output.WriteLine();
+    }
+
+    private void WriteSkipped(SyncResult result)
+    {
+        if (result.Skipped.Count == 0)
+        {
+            return;
+        }
+
+        output.WriteLine();
+        output.WriteLine($"Warning: skipped {Count(result.Skipped.Count, "colliding skill")}:");
+
+        foreach (var skill in result.Skipped)
+        {
+            output.WriteLine($"  {skill.RelativePath}");
+            output.WriteLine($"      from {skill.PackageId} {skill.PackageVersion}");
+            output.WriteLine($"      {skill.Reason}");
+        }
     }
 
     private void WriteNotOnDisk(SyncResult result)

@@ -1,5 +1,5 @@
 ---
-name: widget-usage
+name: contoso.widgets-widget-usage
 description: Correct usage patterns for the Contoso.Widgets library, including lifetime rules and the batching API. Use whenever code creates, configures, or disposes a Widget.
 ---
 

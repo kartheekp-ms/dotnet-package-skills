@@ -6,7 +6,8 @@ Copies agent skills bundled inside NuGet packages into a folder your coding agen
 
 Package authors are the domain experts on their own libraries, and some of them now ship an
 **agent skill** inside the package — instructions covering the conventions, gotchas, and correct
-usage patterns for that library. Those files are packed at `skills/<skill-name>/SKILL.md`.
+usage patterns for that library. Those files are packed at
+`skills/<package-id>-<skill-name>/SKILL.md`.
 
 Restore extracts the package into the **NuGet global packages folder** (`~/.nuget/packages` by
 default), which lives outside your repository and is shared by every project on the machine.
@@ -16,9 +17,9 @@ correct, and invisible.
 This tool bridges that gap.
 
 ```
-~/.nuget/packages/mockly/1.10.0/skills/mockly/SKILL.md     ← where restore puts it
+~/.nuget/packages/mockly/1.10.0/skills/mockly-usage/SKILL.md  ← where restore puts it
         ↓
-.agents/skills/mockly/1.10.0/SKILL.md                      ← where your agent looks
+.agents/skills/mockly-usage/SKILL.md                          ← where your agent looks
 ```
 
 ## Install
@@ -36,7 +37,7 @@ dotnet package-skills sync
 ```
 
 That is the whole workflow. It finds your solution or project, lists its packages, locates each
-one in the NuGet cache, and copies any bundled skills into `.agents/skills/`.
+direct dependency in the NuGet cache, and copies any bundled skills into `.agents/skills/`.
 
 Run it again after adding or upgrading packages. It is idempotent: it refreshes what is current
 and removes what is not.
@@ -45,7 +46,7 @@ and removes what is not.
 
 | Command | What it does |
 | --- | --- |
-| `sync` | Copy bundled skills into the destination, and remove ones left over from earlier package versions. |
+| `sync` | Copy bundled skills into the destination, and remove stale skills no longer provided by direct dependencies. |
 | `list` | Show which packages ship skills, without copying anything. |
 | `uninstall` | Remove skills this tool copied in. |
 
@@ -76,7 +77,6 @@ else alone. Only a target describes a complete set of packages, so only a target
 | `-t, --target <PATH>` | sync, list | Solution or project to inspect. Defaults to searching the current directory. |
 | `-p, --package <ID@VERSION>` | sync, list | Take skills from an exact package instead of a project. Repeatable. No floating versions. |
 | `-d, --destination <PATH>` | all | Where skills are copied. Default `.agents/skills`. |
-| `--include-transitive` | sync, list | Scan the whole dependency graph, not just direct `PackageReference`s. |
 | `--no-restore` | sync, list | Fail instead of restoring when the target has not been restored. |
 | `--global-packages <PATH>` | sync, list | Override the NuGet global packages folder. |
 | `-p, --package <ID[@VERSION]>` | uninstall | Remove only skills from this package — every version, or one. |
@@ -94,45 +94,39 @@ dotnet package-skills sync --destination .codex/skills
 
 ## What you get
 
-Skills land at `<destination>/<package-id>/<version>/`:
+Each authored skill folder lands directly under the destination:
 
 ```
 .agents/skills/
-├── .dotnet-package-skills.json     # what this tool copied in; do not hand-edit
-└── mockly/1.10.0/
-    └── SKILL.md
-```
-
-Package id and version are part of the path deliberately: two packages can ship a skill with the
-same name without colliding, and anyone reading the tree can tell where a skill came from and
-which version it documents.
-
-A package that ships **more than one** skill gets a folder per skill, since they would otherwise
-overwrite each other:
-
-```
-.agents/skills/contoso.widgets/2.3.0/
-├── widget-usage/
+├── .dotnet-package-skills.json            # what this tool copied in; do not hand-edit
+├── contoso.widgets-widget-usage/
 │   ├── SKILL.md
-│   └── references/batching.md
-└── widget-testing/
+│   └── references/
+│       └── batching.md
+└── contoso.widgets-widget-testing/
     └── SKILL.md
 ```
 
-### Solutions where projects disagree on a version
+The tool preserves the skill folder name from the package. Package id and version remain in the
+install manifest for attribution and uninstall filtering, but they are not added to the path.
 
-If two projects in the same solution reference different versions of the same package, you get a
-folder for **each version**:
+Package authors should prefix every folder with their lowercased package id, as shown above. This
+keeps names globally unique when skills from many packages share one destination. The convention is
+documented rather than enforced, so existing safe names still work.
 
-```
-.agents/skills/mockly/
-├── 1.10.0/SKILL.md     # what src/Api references
-└── 1.11.0/SKILL.md     # what src/Worker references
-```
+### Name collisions
 
-Both versions are genuinely in use and each skill documents its own release, so neither can be
-dropped. When every project moves to one version, the next `sync` prunes the one that is no
-longer referenced.
+Destination names are compared case-insensitively. If two package skills choose the same name, the
+first one in deterministic package order is copied and later collisions are skipped with a warning.
+An existing destination folder not tracked by this tool is treated as user-owned and is also
+skipped, never overwritten.
+
+### Package versions
+
+The destination does not support side-by-side skill copies from multiple versions of one package.
+Use [NuGet Central Package Management](https://learn.microsoft.com/nuget/consume-packages/central-package-management)
+to keep projects in a repository on one package version. If several resolved versions provide the
+same skill folder, the first is copied and the others are reported as collisions.
 
 ### Should I commit this folder?
 
@@ -141,7 +135,9 @@ or gitignore it and let each machine refresh it. Pick one and say so in your con
 
 ## For package authors: shipping a skill
 
-Put the skill under `skills/<skill-name>/` in your project and pack it:
+Put each skill under `skills/<package-id>-<skill-name>/`, with its own `SKILL.md` and any supporting
+files. Prefixing the folder with your lowercased package ID keeps your skills from colliding with
+other packages on the consumer's machine.
 
 ```xml
 <ItemGroup>
@@ -161,17 +157,16 @@ Verify what you shipped before publishing — the package is just a zip:
 unzip -l bin/Release/Contoso.Widgets.2.3.0.nupkg | grep skills
 ```
 
-Both layouts are recognised: `skills/<name>/SKILL.md` (preferred, and required if you ship more
-than one skill), and a lone `skills/SKILL.md`, which takes your package id as its name.
+Every skill must have its own immediate subdirectory under `skills/`; a lone `skills/SKILL.md` is
+not discovered.
 
 ## How it works
 
-1. `dotnet list <target> package --format json` — the resolved package graph.
+1. `dotnet list <target> package --format json` — the resolved direct packages.
 2. `dotnet nuget locals global-packages --list` — where restore extracted them. `NUGET_PACKAGES`
    and `--global-packages` take precedence, in that order.
 3. For each package, look in `<global-packages>/<id>/<version>/skills/`.
-4. Copy to `<destination>/<id>/<version>/`, or to `<destination>/<id>/<version>/<skill>/` when the
-   package ships more than one skill.
+4. Copy each `skills/<name>/` folder to `<destination>/<name>/`, skipping and warning on collisions.
 
 Nothing inside a skill is read or interpreted. The package author decides what a skill contains;
 this tool only puts it where an agent will look.

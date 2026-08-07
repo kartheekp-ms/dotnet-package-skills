@@ -42,11 +42,6 @@ namespace DotnetPackageSkills.Cli
                 DefaultValueFactory = _ => DefaultDestination,
             };
 
-            var includeTransitive = new Option<bool>("--include-transitive")
-            {
-                Description = "Also scan transitive dependencies, not just direct PackageReferences.",
-            };
-
             var noRestore = new Option<bool>("--no-restore")
             {
                 Description = "Fail instead of restoring when the target has not been restored yet.",
@@ -78,7 +73,7 @@ namespace DotnetPackageSkills.Cli
 
             var sync = new Command("sync", "Copy skills bundled in NuGet packages into the repository.")
             {
-                target, package, destination, includeTransitive, noRestore, globalPackages, dryRun, json,
+                target, package, destination, noRestore, globalPackages, dryRun, json,
             };
             sync.Validators.Add(RejectTargetWithPackage);
             sync.SetAction(parseResult => Run(() =>
@@ -89,7 +84,7 @@ namespace DotnetPackageSkills.Cli
 
             var list = new Command("list", "Show which packages ship skills, without copying anything.")
             {
-                target, package, destination, includeTransitive, noRestore, globalPackages, json,
+                target, package, destination, noRestore, globalPackages, json,
             };
             list.Validators.Add(RejectTargetWithPackage);
             list.SetAction(parseResult => Run(() =>
@@ -125,9 +120,9 @@ namespace DotnetPackageSkills.Cli
                 """
                 Copies agent skills bundled inside NuGet packages into a folder your coding agent reads.
 
-                Package authors ship skills at skills/<name>/SKILL.md inside the package. Restore
-                extracts them to the NuGet global packages folder, which is outside your repository
-                and which no coding agent scans. This tool bridges that gap.
+                Package authors ship skills at skills/<package-id>-<skill-name>/SKILL.md inside the
+                package. Restore extracts them to the NuGet global packages folder, which is outside
+                your repository and which no coding agent scans. This tool bridges that gap.
                 """)
             {
                 sync, list, uninstall,
@@ -139,7 +134,6 @@ namespace DotnetPackageSkills.Cli
                 Packages = [.. (parseResult.GetValue(package) ?? []).Select(PackageCoordinate.Parse)],
                 Destination = parseResult.GetValue(destination) ?? DefaultDestination,
                 WorkingDirectory = Directory.GetCurrentDirectory(),
-                IncludeTransitive = parseResult.GetValue(includeTransitive),
                 AllowRestore = !parseResult.GetValue(noRestore),
                 GlobalPackagesOverride = parseResult.GetValue(globalPackages),
                 DryRun = parseResult.GetValue(dryRun),

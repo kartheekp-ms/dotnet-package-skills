@@ -1,5 +1,3 @@
-using DotnetPackageSkills.NuGet;
-
 namespace DotnetPackageSkills.Skills;
 
 /// <summary>Finds skills that a package author bundled at <c>skills/</c> in the package root.</summary>
@@ -9,19 +7,12 @@ public static class SkillDiscovery
     public const string SkillManifestFileName = "SKILL.md";
 
     /// <summary>
-    /// Enumerates the skills inside an extracted package and decides where each one lands.
+    /// Enumerates the skills inside an extracted package.
     /// </summary>
     /// <remarks>
-    /// Each immediate subdirectory of <c>skills/</c> is one skill, and the whole directory is
-    /// copied as-is. Nothing inside is read or interpreted — the package author decides what a
-    /// skill contains, and this tool's job is only to put it where an agent will look. A single
-    /// skill placed directly at <c>skills/SKILL.md</c> is also accepted.
-    /// <para>
-    /// Layout: a package that ships one skill lands directly in
-    /// <c>&lt;package&gt;/&lt;version&gt;/</c>, since a further folder would just repeat the
-    /// package name. Only when a package ships several does each need its own folder, to keep
-    /// them from overwriting one another.
-    /// </para>
+    /// Each immediate subdirectory of <c>skills/</c> that contains <c>SKILL.md</c> is one skill,
+    /// and the whole directory is copied as-is. Its authored folder name is also its destination
+    /// folder name. Nothing inside the skill is read or interpreted.
     /// </remarks>
     public static IReadOnlyList<BundledSkill> Discover(string packageDirectory, string packageId, string packageVersion)
     {
@@ -32,18 +23,13 @@ public static class SkillDiscovery
             return [];
         }
 
-        var root = $"{packageId.ToLowerInvariant()}/{PackagePathResolver.NormalizeVersion(packageVersion)}";
-
-        if (File.Exists(Path.Combine(skillsRoot, SkillManifestFileName)))
-        {
-            // No folder of its own, so the skill takes the package id as its name.
-            return [new BundledSkill(packageId, packageVersion, packageId.ToLowerInvariant(), skillsRoot, root)];
-        }
-
         var candidates = Directory.EnumerateDirectories(skillsRoot)
             .Select(directory => new { Directory = directory, Name = Path.GetFileName(directory) })
-            .Where(candidate => IsSafeSkillName(candidate.Name))
+            .Where(candidate =>
+                IsSafeSkillName(candidate.Name) &&
+                File.Exists(Path.Combine(candidate.Directory, SkillManifestFileName)))
             .OrderBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(candidate => candidate.Name, StringComparer.Ordinal)
             .ToList();
 
         return
@@ -53,7 +39,7 @@ public static class SkillDiscovery
                 packageVersion,
                 candidate.Name,
                 candidate.Directory,
-                candidates.Count == 1 ? root : $"{root}/{candidate.Name}")),
+                candidate.Name)),
         ];
     }
 

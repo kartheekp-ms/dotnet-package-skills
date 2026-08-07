@@ -40,30 +40,25 @@ public class PackageListerTests
         """;
 
     [Fact]
-    public void Parse_returns_top_level_packages_only_by_default()
+    public void Parse_returns_direct_packages_only()
     {
-        var packages = PackageLister.Parse(TwoProjectsJson, includeTransitive: false);
+        var packages = PackageLister.Parse(TwoProjectsJson);
 
         Assert.Equal(["Mockly", "Serilog"], packages.Select(p => p.Id));
-        Assert.All(packages, package => Assert.False(package.IsTransitive));
     }
 
     [Fact]
     public void Parse_deduplicates_a_package_referenced_by_several_projects()
     {
-        var packages = PackageLister.Parse(TwoProjectsJson, includeTransitive: false);
+        var packages = PackageLister.Parse(TwoProjectsJson);
 
         Assert.Single(packages, package => package.Id == "Serilog");
     }
 
     [Fact]
-    public void Parse_includes_transitive_packages_on_request()
+    public void Parse_ignores_transitive_packages()
     {
-        var packages = PackageLister.Parse(TwoProjectsJson, includeTransitive: true);
-
-        var transitive = Assert.Single(packages, package => package.Id == "System.Text.Json");
-        Assert.True(transitive.IsTransitive);
-        Assert.Equal("8.0.5", transitive.Version);
+        Assert.DoesNotContain(PackageLister.Parse(TwoProjectsJson), package => package.Id == "System.Text.Json");
     }
 
     [Fact]
@@ -83,7 +78,7 @@ public class PackageListerTests
             }
             """;
 
-        var packages = PackageLister.Parse(json, includeTransitive: false);
+        var packages = PackageLister.Parse(json);
 
         Assert.Equal(["1.0.0", "2.0.0"], packages.Select(p => p.Version));
     }
@@ -110,30 +105,7 @@ public class PackageListerTests
             }
             """;
 
-        Assert.Equal("4.7.2", PackageLister.Parse(json, includeTransitive: false).Single().Version);
-    }
-
-    [Fact]
-    public void Parse_treats_a_package_that_is_both_direct_and_transitive_as_direct()
-    {
-        const string json = """
-            {
-              "projects": [
-                {
-                  "frameworks": [
-                    {
-                      "framework": "net8.0",
-                      "topLevelPackages": [ { "id": "Widgets", "resolvedVersion": "1.0.0" } ],
-                      "transitivePackages": [ { "id": "Widgets", "resolvedVersion": "1.0.0" } ]
-                    }
-                  ]
-                }
-              ]
-            }
-            """;
-
-        var package = Assert.Single(PackageLister.Parse(json, includeTransitive: true));
-        Assert.False(package.IsTransitive);
+        Assert.Equal("4.7.2", PackageLister.Parse(json).Single().Version);
     }
 
     [Fact]
@@ -141,7 +113,7 @@ public class PackageListerTests
     {
         const string json = """{ "version": 1, "projects": [ { "path": "/repo/src/Api/Api.csproj" } ] }""";
 
-        Assert.Empty(PackageLister.Parse(json, includeTransitive: false));
+        Assert.Empty(PackageLister.Parse(json));
     }
 
     [Fact]
@@ -151,7 +123,7 @@ public class PackageListerTests
             { "projects": [ { "frameworks": [ { "framework": "net8.0", "topLevelPackages": [] } ] } ] }
             """;
 
-        Assert.Empty(PackageLister.Parse(json, includeTransitive: false));
+        Assert.Empty(PackageLister.Parse(json));
     }
 
     [Fact]
@@ -159,14 +131,14 @@ public class PackageListerTests
     {
         var noisy = "warning NU1503: Skipping restore for project.\n" + TwoProjectsJson;
 
-        Assert.NotEmpty(PackageLister.Parse(noisy, includeTransitive: false));
+        Assert.NotEmpty(PackageLister.Parse(noisy));
     }
 
     [Fact]
     public void Parse_reports_unusable_output_as_actionable_guidance()
     {
         var exception = Assert.Throws<PackageSkillsException>(
-            () => PackageLister.Parse("Unrecognized option '--format'", includeTransitive: false));
+            () => PackageLister.Parse("Unrecognized option '--format'"));
 
         Assert.Contains("7.0.200", exception.Message);
     }

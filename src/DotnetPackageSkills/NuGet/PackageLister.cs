@@ -5,7 +5,7 @@ using DotnetPackageSkills.Infrastructure;
 namespace DotnetPackageSkills.NuGet;
 
 /// <summary>A package the target resolves to, after de-duplication across projects and frameworks.</summary>
-public sealed record PackageReferenceInfo(string Id, string Version, bool IsTransitive);
+public sealed record PackageReferenceInfo(string Id, string Version);
 
 /// <summary>
 /// Lists the packages a solution or project resolves to, by way of
@@ -33,15 +33,10 @@ public sealed class PackageLister(DotnetCli dotnet)
         AllowTrailingCommas = true,
     };
 
-    public IReadOnlyList<PackageReferenceInfo> List(string target, bool includeTransitive, bool allowRestore)
+    public IReadOnlyList<PackageReferenceInfo> List(string target, bool allowRestore)
     {
         // The target goes *before* the `package` verb: `dotnet list <TARGET> package`.
         var arguments = new List<string> { "list", target, "package", "--format", "json" };
-        if (includeTransitive)
-        {
-            arguments.Add("--include-transitive");
-        }
-
         var result = dotnet.Run(arguments, workingDirectory: Path.GetDirectoryName(target));
 
         if (result.ExitCode != 0 && LooksUnrestored(result))
@@ -69,7 +64,7 @@ public sealed class PackageLister(DotnetCli dotnet)
                  """);
         }
 
-        return Parse(result.StandardOutput, includeTransitive);
+        return Parse(result.StandardOutput);
     }
 
     private void Restore(string target)
@@ -94,36 +89,22 @@ public sealed class PackageLister(DotnetCli dotnet)
         return NotRestoredHints.Any(hint => combined.Contains(hint, StringComparison.OrdinalIgnoreCase));
     }
 
-    internal static IReadOnlyList<PackageReferenceInfo> Parse(string json, bool includeTransitive)
+    internal static IReadOnlyList<PackageReferenceInfo> Parse(string json)
     {
         var report = Deserialize(json);
 
-        // Key on (id, version) so a package referenced by several projects, or pinned
-        // to different versions per target framework, yields one entry per distinct
-        // version — each of which has its own folder in the global packages cache.
+        // Key on (id, version) because each resolved version has its own folder in the global
+        // packages cache. Keeping all versions also lets skill discovery report name collisions.
         var found = new Dictionary<(string Id, string Version), PackageReferenceInfo>();
 
         foreach (var framework in report.Projects?.SelectMany(p => p.Frameworks ?? []) ?? [])
         {
-            Collect(framework.TopLevelPackages, isTransitive: false);
-
-            if (includeTransitive)
-            {
-                Collect(framework.TransitivePackages, isTransitive: true);
-            }
-        }
-
-        return [.. found.Values.OrderBy(p => p.Id, StringComparer.OrdinalIgnoreCase).ThenBy(p => p.Version, StringComparer.Ordinal)];
-
-        void Collect(List<ListPackageEntry>? entries, bool isTransitive)
-        {
-            foreach (var entry in entries ?? [])
+            foreach (var entry in framework.TopLevelPackages ?? [])
             {
                 var id = entry.Id?.Trim();
 
-                // Transitive entries carry only a resolved version; top-level entries
-                // carry both, and the resolved one is what exists on disk (it is the
-                // concrete value behind a floating version or a CPM-managed version).
+                // The resolved version is what exists on disk: it is the concrete value behind a
+                // floating version or a version managed through Central Package Management.
                 var version = Coalesce(entry.ResolvedVersion, entry.RequestedVersion);
 
                 if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(version))
@@ -132,16 +113,11 @@ public sealed class PackageLister(DotnetCli dotnet)
                 }
 
                 var key = (id.ToLowerInvariant(), version.ToLowerInvariant());
-
-                // A package that is both a direct and a transitive reference is direct.
-                if (found.TryGetValue(key, out var existing) && !existing.IsTransitive)
-                {
-                    continue;
-                }
-
-                found[key] = new PackageReferenceInfo(id, version, isTransitive);
+                found[key] = new PackageReferenceInfo(id, version);
             }
         }
+
+        return [.. found.Values.OrderBy(p => p.Id, StringComparer.OrdinalIgnoreCase).ThenBy(p => p.Version, StringComparer.Ordinal)];
 
         static string? Coalesce(string? first, string? second) =>
             string.IsNullOrWhiteSpace(first) ? second?.Trim() : first.Trim();
@@ -219,9 +195,6 @@ public sealed class PackageLister(DotnetCli dotnet)
 
         [JsonPropertyName("topLevelPackages")]
         public List<ListPackageEntry>? TopLevelPackages { get; set; }
-
-        [JsonPropertyName("transitivePackages")]
-        public List<ListPackageEntry>? TransitivePackages { get; set; }
     }
 
     private sealed class ListPackageEntry

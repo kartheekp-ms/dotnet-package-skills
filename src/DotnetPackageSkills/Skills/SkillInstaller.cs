@@ -3,7 +3,10 @@ using DotnetPackageSkills.NuGet;
 namespace DotnetPackageSkills.Skills;
 
 /// <summary>Outcome of an install or sync.</summary>
-public sealed record InstallOutcome(IReadOnlyList<BundledSkill> Installed, IReadOnlyList<ManifestEntry> Removed);
+public sealed record InstallOutcome(
+    IReadOnlyList<BundledSkill> Installed,
+    IReadOnlyList<ManifestEntry> Removed,
+    IReadOnlyList<SkippedSkill> Skipped);
 
 /// <summary>Copies discovered skills into the destination and keeps the manifest in step.</summary>
 public sealed class SkillInstaller
@@ -25,7 +28,43 @@ public sealed class SkillInstaller
         bool prune = true)
     {
         var manifest = InstallManifest.Load(destinationRoot);
-        var current = skills.Select(skill => skill.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var (selected, duplicateSkips) = SelectUniqueDestinations(skills);
+        var accepted = new List<BundledSkill>();
+        var skipped = new List<SkippedSkill>(duplicateSkips);
+
+        foreach (var skill in selected)
+        {
+            var tracked = manifest.Installed.FirstOrDefault(entry =>
+                entry.Path.Equals(skill.RelativePath, StringComparison.OrdinalIgnoreCase));
+            var destination = ToAbsolute(destinationRoot, skill.RelativePath);
+
+            if (File.Exists(destination))
+            {
+                skipped.Add(ToSkipped(skill, "the destination path already exists as a file"));
+                continue;
+            }
+
+            if (tracked is null && Directory.Exists(destination))
+            {
+                skipped.Add(ToSkipped(
+                    skill,
+                    "the destination folder already exists and is not managed by this tool"));
+                continue;
+            }
+
+            if (!prune && tracked is not null && !HasSameOwner(tracked, skill))
+            {
+                skipped.Add(ToSkipped(
+                    skill,
+                    $"the destination folder is managed for {tracked.Package} {tracked.Version} " +
+                    $"skill '{tracked.Skill}'"));
+                continue;
+            }
+
+            accepted.Add(skill);
+        }
+
+        var current = accepted.Select(skill => skill.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var stale = prune
             ? manifest.Installed
@@ -36,21 +75,18 @@ public sealed class SkillInstaller
 
         if (dryRun)
         {
-            return new InstallOutcome(skills, stale);
+            return new InstallOutcome(accepted, stale, skipped);
         }
 
-        // Remove before copying, never after. A layout change can make a stale path the
-        // ancestor of a path about to be written — <package>/<version>/ becomes
-        // <package>/<version>/<skill>/ the moment a package starts shipping a second skill —
-        // and a recursive delete afterwards would take the freshly copied skills with it.
+        // Remove before copying so a stale ancestor can never delete a freshly copied skill.
         var removed = stale.Where(entry => RemoveSkillDirectory(destinationRoot, entry.Path)).ToList();
 
-        foreach (var skill in skills)
+        foreach (var skill in accepted)
         {
             CopyDirectory(skill.SourcePath, ToAbsolute(destinationRoot, skill.RelativePath));
         }
 
-        var installed = skills.Select(skill => new ManifestEntry
+        var installed = accepted.Select(skill => new ManifestEntry
         {
             Path = skill.RelativePath,
             Package = skill.PackageId,
@@ -65,7 +101,7 @@ public sealed class SkillInstaller
 
         manifest.Save(destinationRoot);
 
-        return new InstallOutcome(skills, removed);
+        return new InstallOutcome(accepted, removed, skipped);
     }
 
     /// <summary>
@@ -129,8 +165,7 @@ public sealed class SkillInstaller
         Path.Combine(destinationRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
 
     /// <summary>
-    /// Deletes an installed skill folder, then any package/version directories the removal
-    /// left empty, so an uninstall does not leave a husk of empty folders behind.
+    /// Deletes an installed skill folder, then any empty parent directories below the destination.
     /// </summary>
     private static bool RemoveSkillDirectory(string destinationRoot, string relativePath)
     {
@@ -218,4 +253,41 @@ public sealed class SkillInstaller
             File.SetAttributes(path, attributes & ~FileAttributes.ReadOnly);
         }
     }
+
+    private static (List<BundledSkill> Selected, List<SkippedSkill> Skipped) SelectUniqueDestinations(
+        IReadOnlyList<BundledSkill> skills)
+    {
+        var selected = new List<BundledSkill>();
+        var skipped = new List<SkippedSkill>();
+        var destinations = new Dictionary<string, BundledSkill>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var skill in skills)
+        {
+            if (destinations.TryAdd(skill.RelativePath, skill))
+            {
+                selected.Add(skill);
+                continue;
+            }
+
+            var retained = destinations[skill.RelativePath];
+            skipped.Add(ToSkipped(
+                skill,
+                $"conflicts with {retained.PackageId} {retained.PackageVersion} skill " +
+                $"'{retained.SkillName}', which was selected first"));
+        }
+
+        return (selected, skipped);
+    }
+
+    private static bool HasSameOwner(ManifestEntry entry, BundledSkill skill) =>
+        entry.Package.Equals(skill.PackageId, StringComparison.OrdinalIgnoreCase) &&
+        entry.Skill.Equals(skill.SkillName, StringComparison.OrdinalIgnoreCase);
+
+    private static SkippedSkill ToSkipped(BundledSkill skill, string reason) =>
+        new(
+            skill.RelativePath,
+            skill.PackageId,
+            skill.PackageVersion,
+            skill.SkillName,
+            reason);
 }

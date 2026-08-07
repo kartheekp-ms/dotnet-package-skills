@@ -9,13 +9,17 @@ namespace DotnetPackageSkills.Skills;
 /// Destination path relative to the skills root, always with forward slashes so the manifest is
 /// stable across operating systems.
 /// </param>
-/// <remarks>
-/// The destination path is decided during discovery rather than derived here, because it depends
-/// on how many skills the package ships — see <see cref="SkillDiscovery"/>.
-/// </remarks>
 public sealed record BundledSkill(
     string PackageId,
     string PackageVersion,
     string SkillName,
     string SourcePath,
     string RelativePath);
+
+/// <summary>A package skill that was not copied because its destination path collided.</summary>
+public sealed record SkippedSkill(
+    string RelativePath,
+    string PackageId,
+    string PackageVersion,
+    string SkillName,
+    string Reason);
