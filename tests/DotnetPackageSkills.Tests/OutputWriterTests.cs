@@ -56,6 +56,51 @@ public class OutputWriterTests
         Assert.Contains("None of the scanned packages ship a skills/ folder", output.ToString());
     }
 
+    [Fact]
+    public void List_reports_what_it_found_rather_than_a_pending_copy()
+    {
+        using var output = new StringWriter();
+
+        // list always runs as a dry run internally, but it is a query: it was never going
+        // to copy anything, so "Would copy" would misdescribe it.
+        new OutputWriter(output).WriteSyncReport(ResultWithCollision() with { DryRun = true }, copied: false);
+
+        var report = output.ToString();
+        Assert.Contains("Found 1 skill:", report);
+        Assert.DoesNotContain("Would copy", report);
+    }
+
+    [Fact]
+    public void A_sync_dry_run_still_says_what_it_would_copy()
+    {
+        using var output = new StringWriter();
+
+        new OutputWriter(output).WriteSyncReport(ResultWithCollision() with { DryRun = true }, copied: true);
+
+        Assert.Contains("Would copy 1 skill:", output.ToString());
+    }
+
+    [Fact]
+    public void Packages_that_were_never_extracted_are_not_said_to_ship_no_skills()
+    {
+        using var output = new StringWriter();
+        var result = ResultWithCollision() with
+        {
+            Skills = [],
+            Skipped = [],
+            SkillsDiscovered = 0,
+            NotOnDisk = ["Ghost.Package 9.9.9"],
+        };
+
+        new OutputWriter(output).WriteSyncReport(result, copied: true);
+
+        var report = output.ToString();
+        Assert.Contains("No bundled skills found.", report);
+        // We could not look inside the package, so claiming it ships nothing would be a guess.
+        Assert.DoesNotContain("ship a skills/ folder", report);
+        Assert.Contains("not extracted in the NuGet cache", report);
+    }
+
     private static SyncResult ResultWithCollision() => new()
     {
         Target = @"C:\repo\App.sln",

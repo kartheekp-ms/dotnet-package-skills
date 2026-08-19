@@ -24,9 +24,11 @@ public sealed class OutputWriter(TextWriter output)
     {
         WriteContext(result);
 
-        var verb = result.DryRun
-            ? "Would copy"
-            : copied ? "Copied" : "Found";
+        var verb = copied
+            ? result.DryRun ? "Would copy" : "Copied"
+            // list discovers without writing, and it always runs as a dry run, so asking
+            // DryRun first would make this branch unreachable and claim a copy was pending.
+            : "Found";
 
         if (result.Skills.Count > 0)
         {
@@ -44,6 +46,12 @@ public sealed class OutputWriter(TextWriter output)
             // deselected or skipped. Saying nobody ships a skill here would be a lie, and the
             // sections below already explain what happened to each one.
             output.WriteLine($"{verb} no skills.");
+        }
+        else if (result.NotOnDisk.Count > 0)
+        {
+            // We could not look inside every package, so we are in no position to say what
+            // they do or do not ship. The unextracted list below says what to do about it.
+            output.WriteLine("No bundled skills found.");
         }
         else
         {

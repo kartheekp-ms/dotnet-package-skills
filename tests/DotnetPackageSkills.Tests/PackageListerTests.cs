@@ -1,9 +1,76 @@
+using DotnetPackageSkills.Infrastructure;
 using DotnetPackageSkills.NuGet;
 
 namespace DotnetPackageSkills.Tests;
 
 public class PackageListerTests
 {
+    /// <summary>Records what was asked of the CLI and replays a canned result.</summary>
+    private sealed class RecordingRunner(int exitCode, string standardOutput, string standardError = "")
+        : IProcessRunner
+    {
+        public List<string> Invocations { get; } = [];
+
+        public ProcessResult Run(string fileName, IReadOnlyList<string> arguments, string? workingDirectory = null)
+        {
+            Invocations.Add(string.Join(' ', arguments));
+
+            return arguments.Contains("restore")
+                ? new ProcessResult(0, "Restore succeeded.", string.Empty)
+                : new ProcessResult(exitCode, standardOutput, standardError);
+        }
+    }
+
+    private const string UnrestoredError =
+        "No assets file was found for 'App.csproj'. Run restore before running this command.";
+
+    [Fact]
+    public void List_passes_no_restore_through_to_the_cli()
+    {
+        // `dotnet list package` restores by itself, so not forwarding this would let a
+        // --no-restore run quietly restore anyway.
+        var runner = new RecordingRunner(0, TwoProjectsJson);
+
+        new PackageLister(new DotnetCli(runner)).List("App.csproj", allowRestore: false);
+
+        Assert.Contains("--no-restore", Assert.Single(runner.Invocations));
+    }
+
+    [Fact]
+    public void List_does_not_pass_no_restore_when_restoring_is_allowed()
+    {
+        var runner = new RecordingRunner(0, TwoProjectsJson);
+
+        new PackageLister(new DotnetCli(runner)).List("App.csproj", allowRestore: true);
+
+        Assert.DoesNotContain("--no-restore", Assert.Single(runner.Invocations));
+    }
+
+    [Fact]
+    public void List_refuses_to_restore_an_unrestored_target_when_told_not_to()
+    {
+        var runner = new RecordingRunner(1, string.Empty, UnrestoredError);
+
+        var error = Assert.Throws<PackageSkillsException>(
+            () => new PackageLister(new DotnetCli(runner)).List("App.csproj", allowRestore: false));
+
+        Assert.Contains("has not been restored", error.Message);
+        Assert.Contains("dotnet restore", error.Message);
+        Assert.DoesNotContain(runner.Invocations, line => line.StartsWith("restore", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void List_restores_an_unrestored_target_when_allowed_to()
+    {
+        var runner = new RecordingRunner(1, string.Empty, UnrestoredError);
+
+        // The canned result never turns green, so this also proves it stops rather than looping.
+        Assert.Throws<PackageSkillsException>(
+            () => new PackageLister(new DotnetCli(runner)).List("App.csproj", allowRestore: true));
+
+        Assert.Contains(runner.Invocations, line => line.StartsWith("restore", StringComparison.Ordinal));
+    }
+
     private const string TwoProjectsJson = """
         {
           "version": 1,

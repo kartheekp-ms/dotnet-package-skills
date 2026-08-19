@@ -37,6 +37,14 @@ public sealed class PackageLister(DotnetCli dotnet)
     {
         // The target goes *before* the `package` verb: `dotnet list <TARGET> package`.
         var arguments = new List<string> { "list", target, "package", "--format", "json" };
+
+        if (!allowRestore)
+        {
+            // `dotnet list package` restores implicitly on current SDKs, so without passing
+            // this through it would restore anyway and --no-restore would be a silent no-op.
+            arguments.Add("--no-restore");
+        }
+
         var result = dotnet.Run(arguments, workingDirectory: Path.GetDirectoryName(target));
 
         if (result.ExitCode != 0 && LooksUnrestored(result))

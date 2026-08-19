@@ -162,6 +162,10 @@ level.
   a lot of teams are still on.
 - `dotnet list package --format json` requires SDK 7.0.200+. That is the floor for what the tool
   can inspect, and the error message says so when it isn't met.
+- **`dotnet list package` restores implicitly**, so `--no-restore` has to be forwarded to it. Left
+  off, the SDK restores anyway, the command succeeds, and the user's `--no-restore` becomes a
+  silent no-op — the failure mode is invisible, which is why `PackageListerTests` asserts the flag
+  is passed through.
 - Output of `dotnet nuget locals` has changed shape across SDK versions. Parsing keys off the
   `global-packages:` label rather than line position — keep it that way.
 
