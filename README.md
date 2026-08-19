@@ -46,7 +46,7 @@ and removes what is not.
 
 | Command | What it does |
 | --- | --- |
-| `sync` | Copy bundled skills into the destination, and remove stale skills no longer provided by direct dependencies. |
+| `sync` | Copy bundled skills into the destination. Removes stale skills no longer provided by direct dependencies, and any you turn off with `--interactive`. |
 | `list` | Show which packages ship skills, without copying anything. |
 | `uninstall` | Remove skills this tool copied in. |
 
@@ -91,6 +91,18 @@ Skills for MyApp.slnx                                       page 1 of 3
 
   2 of 24 selected   1 to remove
 ```
+
+The legend shows the keys you need; these all work:
+
+| Key | Does |
+| --- | --- |
+| `up` / `down` | Move, wrapping around at either end |
+| `left` / `right`, `pgup` / `pgdn` | Previous / next page |
+| `home` / `end` | Jump to the first / last skill |
+| `space` | Toggle the highlighted skill |
+| `a` / `c` | Select all / clear all, across every page |
+| `enter` | Confirm the selection |
+| `esc` / `q` | Cancel, changing nothing |
 
 Ten skills a page, because a list long enough to scroll off the top is a list nobody reads before
 agreeing to it. Skills you already have start selected, so pressing enter straight away changes

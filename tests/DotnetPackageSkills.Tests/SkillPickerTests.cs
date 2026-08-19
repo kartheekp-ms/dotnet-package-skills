@@ -84,6 +84,55 @@ public class SkillPickerTests
     }
 
     [Fact]
+    public void Moving_down_from_the_last_skill_wraps_to_the_first_page()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.End, ConsoleKey.DownArrow, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(24), Title);
+
+        var frame = terminal.Frames[2];
+        Assert.Contains("page 1 of 3", frame);
+        Assert.Contains("> [ ] skill-01", frame);
+    }
+
+    [Fact]
+    public void Left_arrow_pages_back()
+    {
+        var terminal = new FakeTerminal()
+            .Press(ConsoleKey.RightArrow, ConsoleKey.RightArrow, ConsoleKey.LeftArrow, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(24), Title);
+
+        Assert.Contains("page 3 of 3", terminal.Frames[2]);
+
+        var frame = terminal.Frames[3];
+        Assert.Contains("page 2 of 3", frame);
+        Assert.Contains("> [ ] skill-11", frame);
+    }
+
+    [Fact]
+    public void Page_up_and_page_down_page_like_the_arrows()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.PageDown, ConsoleKey.PageUp, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(24), Title);
+
+        Assert.Contains("page 2 of 3", terminal.Frames[1]);
+        Assert.Contains("page 1 of 3", terminal.Frames[2]);
+    }
+
+    [Fact]
+    public void Home_and_end_jump_to_the_first_and_last_skill()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.End, ConsoleKey.Home, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(24), Title);
+
+        Assert.Contains("> [ ] skill-24", terminal.Frames[1]);
+        Assert.Contains("> [ ] skill-01", terminal.Frames[2]);
+    }
+
+    [Fact]
     public void Space_selects_the_focused_skill()
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
