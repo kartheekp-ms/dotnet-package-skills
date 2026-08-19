@@ -247,6 +247,87 @@ public class SkillInstallerTests
     }
 
     [Fact]
+    public void Install_removes_a_deselected_skill_even_when_the_install_is_additive()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(
+            destination,
+            [Skill(temp, "Mockly", "1.10.0", "mockly"), Skill(temp, "Contoso.Widgets", "2.3.0", "widget-usage")],
+            dryRun: false);
+
+        // Additive normally means "this says nothing about the rest", but a deselection is an
+        // instruction rather than an inference, so it removes regardless.
+        var outcome = _installer.Install(
+            destination,
+            [Skill(temp, "Mockly", "1.10.0", "mockly")],
+            dryRun: false,
+            prune: false,
+            deselected: ["widget-usage"]);
+
+        Assert.Equal("widget-usage", Assert.Single(outcome.Removed).Skill);
+        Assert.False(Directory.Exists(Path.Combine(destination, "widget-usage")));
+        Assert.Equal("Mockly", Assert.Single(InstallManifest.Load(destination).Installed).Package);
+    }
+
+    [Fact]
+    public void Install_still_leaves_additive_skills_nobody_deselected()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(
+            destination,
+            [Skill(temp, "Mockly", "1.10.0", "mockly"), Skill(temp, "Contoso.Widgets", "2.3.0", "widget-usage")],
+            dryRun: false);
+
+        _installer.Install(
+            destination,
+            [Skill(temp, "Mockly", "1.10.0", "mockly")],
+            dryRun: false,
+            prune: false,
+            deselected: []);
+
+        Assert.True(Directory.Exists(Path.Combine(destination, "widget-usage")));
+    }
+
+    [Fact]
+    public void Install_keeps_a_skill_that_is_both_selected_and_deselected()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        var skill = Skill(temp, "Mockly", "1.10.0", "mockly");
+        _installer.Install(destination, [skill], dryRun: false);
+
+        var outcome = _installer.Install(
+            destination,
+            [skill],
+            dryRun: false,
+            prune: false,
+            deselected: ["mockly"]);
+
+        Assert.Empty(outcome.Removed);
+        Assert.True(File.Exists(Path.Combine(destination, "mockly", "SKILL.md")));
+    }
+
+    [Fact]
+    public void Install_with_dryRun_reports_a_deselected_skill_without_removing_it()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly")], dryRun: false);
+
+        var outcome = _installer.Install(
+            destination,
+            [],
+            dryRun: true,
+            prune: false,
+            deselected: ["mockly"]);
+
+        Assert.Equal("mockly", Assert.Single(outcome.Removed).Skill);
+        Assert.True(Directory.Exists(Path.Combine(destination, "mockly")));
+    }
+
+    [Fact]
     public void Install_replaces_files_that_a_newer_package_version_dropped()
     {
         using var temp = new TempDirectory();

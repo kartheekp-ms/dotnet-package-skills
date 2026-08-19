@@ -63,6 +63,13 @@ namespace DotnetPackageSkills.Cli
                 Description = "Emit machine-readable JSON instead of the human-readable report.",
             };
 
+            var interactive = new Option<bool>("--interactive", "-i")
+            {
+                Description =
+                    "Choose which discovered skills to install, one page at a time. Skills already " +
+                    "installed start selected; turning one off removes it.",
+            };
+
             var uninstallPackage = new Option<string?>("--package", "-p")
             {
                 Description =
@@ -73,12 +80,25 @@ namespace DotnetPackageSkills.Cli
 
             var sync = new Command("sync", "Copy skills bundled in NuGet packages into the repository.")
             {
-                target, package, destination, noRestore, globalPackages, dryRun, json,
+                target, package, destination, noRestore, globalPackages, dryRun, json, interactive,
             };
             sync.Validators.Add(RejectTargetWithPackage);
+            sync.Validators.Add(RejectInteractiveWithJson);
             sync.SetAction(parseResult => Run(() =>
             {
-                var result = new SkillSyncService(new ProcessRunner()).Sync(BuildRequest(parseResult));
+                var request = BuildRequest(parseResult);
+                var service = new SkillSyncService(new ProcessRunner());
+
+                var result = parseResult.GetValue(interactive)
+                    ? SyncInteractively(service, request)
+                    : service.Sync(request);
+
+                if (result is null)
+                {
+                    new OutputWriter(Console.Out).WriteCancelled();
+                    return;
+                }
+
                 Report(parseResult, writer => writer.WriteSyncReport(result, copied: true), result);
             }));
 
@@ -150,6 +170,16 @@ namespace DotnetPackageSkills.Cli
                 }
             }
 
+            void RejectInteractiveWithJson(System.CommandLine.Parsing.CommandResult result)
+            {
+                if (result.GetResult(interactive) is not null && result.GetResult(json) is not null)
+                {
+                    result.AddError(
+                        "--interactive and --json cannot be combined. JSON output is for scripts, " +
+                        "and a script has nobody to answer the prompt.");
+                }
+            }
+
             void Report(ParseResult parseResult, Action<OutputWriter> writeReport, object jsonPayload)
             {
                 var writer = new OutputWriter(Console.Out);
@@ -164,6 +194,37 @@ namespace DotnetPackageSkills.Cli
                 }
             }
         }
+
+        /// <summary>
+        /// Discovers skills, lets the user pick from them a page at a time, then installs the
+        /// selection. Returns null when the user cancelled.
+        /// </summary>
+        private static SyncResult? SyncInteractively(SkillSyncService service, SyncRequest request)
+        {
+            var discovered = service.Discover(request);
+
+            // Nothing to choose between, so there is no prompt to show. Sync anyway, because
+            // pruning still has work to do when a package stopped shipping a skill.
+            if (discovered.Skills.Count == 0)
+            {
+                return service.Sync(request, discovered, choice: null);
+            }
+
+            var installed = SkillSyncService.InstalledSkillNames(discovered.Destination);
+
+            var items = discovered.Skills
+                .Select(skill => new SkillPickerItem(skill, installed.Contains(skill.RelativePath)))
+                .ToList();
+
+            var choice = new SkillPicker(new SystemTerminal()).Choose(items, PickerTitle(discovered));
+
+            return choice is null ? null : service.Sync(request, discovered, choice);
+        }
+
+        private static string PickerTitle(SyncResult discovered) =>
+            discovered.Target is null
+                ? "Skills from the packages you named"
+                : $"Skills for {Path.GetFileName(discovered.Target)}";
 
         /// <summary>
         /// Splits the uninstall filter, which unlike --package on install may omit the version

@@ -38,6 +38,13 @@ public sealed class OutputWriter(TextWriter output)
                 output.WriteLine($"      from {skill.PackageId} {skill.PackageVersion}");
             }
         }
+        else if (result.SkillsDiscovered > 0)
+        {
+            // Packages did ship skills; none of them ended up installed, because they were
+            // deselected or skipped. Saying nobody ships a skill here would be a lie, and the
+            // sections below already explain what happened to each one.
+            output.WriteLine($"{verb} no skills.");
+        }
         else
         {
             output.WriteLine("No bundled skills found. None of the scanned packages ship a skills/ folder.");
@@ -47,7 +54,7 @@ public sealed class OutputWriter(TextWriter output)
         {
             output.WriteLine();
             output.WriteLine(
-                $"{(result.DryRun ? "Would remove" : "Removed")} {Count(result.Removed.Count, "stale skill")}:");
+                $"{(result.DryRun ? "Would remove" : "Removed")} {Count(result.Removed.Count, "skill")}:");
 
             foreach (var entry in result.Removed)
             {
@@ -139,6 +146,15 @@ public sealed class OutputWriter(TextWriter output)
     public void WriteError(string message)
     {
         Console.Error.WriteLine($"error: {message}");
+    }
+
+    /// <summary>
+    /// Reported when the user leaves the interactive picker without confirming. Nothing failed,
+    /// so this is a statement of fact rather than an error.
+    /// </summary>
+    public void WriteCancelled()
+    {
+        output.WriteLine("Cancelled. Nothing was copied or removed.");
     }
 
     private static string Count(int value, string noun) => $"{value} {noun}{(value == 1 ? string.Empty : "s")}";

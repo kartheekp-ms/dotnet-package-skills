@@ -21,11 +21,18 @@ public sealed class SkillInstaller
     /// few packages explicitly rather than describing a whole project, because then
     /// "not in this list" means "not asked about", not "no longer referenced".
     /// </param>
+    /// <param name="deselected">
+    /// Destination paths the user explicitly chose not to install. These are removed even when
+    /// <paramref name="prune"/> is false, because pruning is an inference drawn from a complete
+    /// package set whereas a deselection is a direct instruction. Only paths the user was
+    /// actually shown belong here.
+    /// </param>
     public InstallOutcome Install(
         string destinationRoot,
         IReadOnlyList<BundledSkill> skills,
         bool dryRun,
-        bool prune = true)
+        bool prune = true,
+        IReadOnlyCollection<string>? deselected = null)
     {
         var manifest = InstallManifest.Load(destinationRoot);
         var trackedSkills = manifest.EnumerateSkills().ToList();
@@ -67,12 +74,15 @@ public sealed class SkillInstaller
 
         var current = accepted.Select(skill => skill.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var stale = prune
-            ? trackedSkills
-                .Where(entry => !current.Contains(entry.Skill))
-                .OrderBy(entry => entry.Skill, StringComparer.Ordinal)
-                .ToList()
-            : [];
+        var removeAnyway = deselected is null
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(deselected, StringComparer.OrdinalIgnoreCase);
+
+        var stale = trackedSkills
+            .Where(entry => !current.Contains(entry.Skill))
+            .Where(entry => prune || removeAnyway.Contains(entry.Skill))
+            .OrderBy(entry => entry.Skill, StringComparer.Ordinal)
+            .ToList();
 
         if (dryRun)
         {
@@ -92,8 +102,11 @@ public sealed class SkillInstaller
 
         var next = prune
             ? installed
-            // Additive: keep what was already tracked, replacing entries we just rewrote.
-            : trackedSkills.Where(entry => !current.Contains(entry.Skill)).Concat(installed);
+            // Additive: keep what was already tracked, replacing entries we just rewrote and
+            // dropping the ones the user deselected.
+            : trackedSkills
+                .Where(entry => !current.Contains(entry.Skill) && !removeAnyway.Contains(entry.Skill))
+                .Concat(installed);
 
         manifest.SetSkills(next);
         manifest.Save(destinationRoot);

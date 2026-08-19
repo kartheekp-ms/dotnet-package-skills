@@ -32,6 +32,30 @@ public class OutputWriterTests
         Assert.Contains("\"relativePath\": \"shared-skill\"", json);
     }
 
+    [Fact]
+    public void Deselecting_everything_does_not_claim_the_packages_ship_no_skills()
+    {
+        using var output = new StringWriter();
+        var result = ResultWithCollision() with { Skills = [], SkillsDiscovered = 2 };
+
+        new OutputWriter(output).WriteSyncReport(result, copied: true);
+
+        var report = output.ToString();
+        Assert.Contains("Copied no skills.", report);
+        Assert.DoesNotContain("ship a skills/ folder", report);
+    }
+
+    [Fact]
+    public void A_scan_that_discovered_nothing_says_so_plainly()
+    {
+        using var output = new StringWriter();
+        var result = ResultWithCollision() with { Skills = [], Skipped = [], SkillsDiscovered = 0 };
+
+        new OutputWriter(output).WriteSyncReport(result, copied: true);
+
+        Assert.Contains("None of the scanned packages ship a skills/ folder", output.ToString());
+    }
+
     private static SyncResult ResultWithCollision() => new()
     {
         Target = @"C:\repo\App.sln",

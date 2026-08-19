@@ -31,6 +31,14 @@ public sealed record SyncResult
     public required int PackagesScanned { get; init; }
     public required bool DryRun { get; init; }
     public required IReadOnlyList<BundledSkill> Skills { get; init; }
+
+    /// <summary>
+    /// How many skills discovery turned up, which stays put even after <see cref="Skills"/> is
+    /// narrowed to what was actually installed. Without it a report cannot tell "no package ships
+    /// a skill" apart from "you chose none of the ones that do".
+    /// </summary>
+    public int SkillsDiscovered { get; init; }
+
     public IReadOnlyList<TrackedSkill> Removed { get; init; } = [];
     public IReadOnlyList<SkippedSkill> Skipped { get; init; } = [];
 
@@ -40,6 +48,16 @@ public sealed record SyncResult
     /// </summary>
     public IReadOnlyList<string> NotOnDisk { get; init; } = [];
 }
+
+/// <summary>Which discovered skills the user chose, and which installed ones they turned off.</summary>
+/// <param name="Selected">Skills to install.</param>
+/// <param name="Deselected">
+/// Destination paths that were installed and are no longer wanted. These are removed even when
+/// the request would otherwise be additive.
+/// </param>
+public sealed record SkillChoice(
+    IReadOnlyList<BundledSkill> Selected,
+    IReadOnlyList<string> Deselected);
 
 /// <summary>Ties package listing, skill discovery, and installation together.</summary>
 public sealed class SkillSyncService(DotnetCli dotnet, SkillInstaller installer)
@@ -144,23 +162,29 @@ public sealed class SkillSyncService(DotnetCli dotnet, SkillInstaller installer)
             PackagesScanned = packagesScanned,
             DryRun = request.DryRun,
             Skills = skills,
+            SkillsDiscovered = skills.Count,
             NotOnDisk = notOnDisk,
             Skipped = skipped,
         };
 
     /// <summary>Discovers bundled skills and copies them into the destination.</summary>
-    public SyncResult Sync(SyncRequest request)
-    {
-        var discovered = Discover(request);
+    public SyncResult Sync(SyncRequest request) => Sync(request, Discover(request), choice: null);
 
+    /// <summary>
+    /// Copies a caller-chosen subset of already-discovered skills, which is what the interactive
+    /// picker produces. Passing a null <paramref name="choice"/> installs everything discovered.
+    /// </summary>
+    public SyncResult Sync(SyncRequest request, SyncResult discovered, SkillChoice? choice)
+    {
         // Only a target describes a complete set of packages, so only a target licenses
         // pruning. Naming packages explicitly is additive — it says nothing about the
         // skills already installed from elsewhere.
         var outcome = installer.Install(
             discovered.Destination,
-            discovered.Skills,
+            choice?.Selected ?? discovered.Skills,
             request.DryRun,
-            prune: request.Packages.Count == 0);
+            prune: request.Packages.Count == 0,
+            deselected: choice?.Deselected);
 
         return discovered with
         {
@@ -169,6 +193,13 @@ public sealed class SkillSyncService(DotnetCli dotnet, SkillInstaller installer)
             Skipped = [.. discovered.Skipped, .. outcome.Skipped],
         };
     }
+
+    /// <summary>Skill folder names the manifest in <paramref name="destination"/> already tracks.</summary>
+    public static IReadOnlySet<string> InstalledSkillNames(string destination) =>
+        InstallManifest.Load(destination)
+            .EnumerateSkills()
+            .Select(entry => entry.Skill)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Removes skills this tool installed, optionally limited to one package or one exact version.

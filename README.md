@@ -70,6 +70,38 @@ describing a release you do not actually reference.
 Naming packages explicitly is **additive** — it copies what you asked for and leaves everything
 else alone. Only a target describes a complete set of packages, so only a target prunes.
 
+### Choosing which skills to install
+
+By default `sync` copies everything it finds. Add `--interactive` to choose:
+
+```bash
+dotnet package-skills sync --interactive
+```
+
+```
+Skills for MyApp.slnx                                       page 1 of 3
+
+  up/down move   left/right page   space toggle
+  a all   c none   enter confirm   esc cancel
+
+> [x] contoso.widgets-widget-usage      installed  Contoso.Widgets 2.3.0
+  [ ] contoso.widgets-widget-testing    new        Contoso.Widgets 2.3.0
+  [x] mockly-usage                      installed  Mockly 1.10.0
+  [ ] serilog-console-guidance          new        Serilog.Sinks.Console 5.0.1
+
+  2 of 24 selected   1 to remove
+```
+
+Ten skills a page, because a list long enough to scroll off the top is a list nobody reads before
+agreeing to it. Skills you already have start selected, so pressing enter straight away changes
+nothing and a new skill is always an explicit opt-in.
+
+**Turning off a skill you already have deletes it** — including under `--package`, where sync is
+otherwise additive. Pruning is inferred from a complete package set; deselecting is you saying so.
+
+`--interactive` needs a terminal and cannot be combined with `--json`. Pair it with `--dry-run` to
+see what a selection would change before committing to it.
+
 ### Options
 
 | Option | Applies to | Description |
@@ -79,6 +111,7 @@ else alone. Only a target describes a complete set of packages, so only a target
 | `-d, --destination <PATH>` | all | Where skills are copied. Default `.agents/skills`. |
 | `--no-restore` | sync, list | Fail instead of restoring when the target has not been restored. |
 | `--global-packages <PATH>` | sync, list | Override the NuGet global packages folder. |
+| `-i, --interactive` | sync | Choose which skills to install, a page at a time. Not with `--json`. |
 | `-p, --package <ID[@VERSION]>` | uninstall | Remove only skills from this package — every version, or one. |
 | `--dry-run` | sync, uninstall | Report what would change without writing anything. |
 | `--json` | all | Machine-readable output, for scripts and agents. |

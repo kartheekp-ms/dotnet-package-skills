@@ -36,6 +36,8 @@ src/DotnetPackageSkills/
 ├── Program.cs              CLI surface: commands, options, exit codes
 ├── SkillSyncService.cs     Orchestration — the only place the steps are sequenced
 ├── Cli/OutputWriter.cs     Human-readable and JSON rendering
+├── Cli/SkillPicker.cs      The --interactive picker, paged so one screen is one page
+├── Cli/ITerminal.cs        Console access behind an interface, so the picker can be tested
 ├── Infrastructure/         Process execution and the dotnet CLI wrapper
 ├── NuGet/                  Target detection, package listing, cache path resolution
 └── Skills/                 Discovery, copying, pruning, the install manifest
@@ -73,6 +75,23 @@ nothing about the rest, so it copies additively — see the `prune` parameter on
 `SkillInstaller.Install`. Getting this backwards would delete a user's other skills the first time
 they synced a single package.
 
+**A deselection removes; an omission does not.** `--interactive` hands `SkillInstaller.Install` a
+`deselected` set of destination paths, and those go even when `prune` is false. That is not a hole
+in the rule above: pruning is inferred from a complete package set, whereas a user turning a skill
+off is a direct instruction about that skill. Only paths the picker actually displayed may go in
+that set, so interactive mode can never remove something it did not show.
+
+**The picker pages, and that is the point.** A solution can reference many packages that ship
+skills. `SkillPicker` renders a fixed-height frame of at most ten and redraws it in place, so the
+list can never scroll off the top unread — agreeing to skills you did not see is the failure mode
+worth designing against. It never reads a `SKILL.md`; it shows the folder name, package, and
+version already on `BundledSkill`.
+
+**The picker frame is ASCII, and stays that way.** Windows consoles default to an OEM code page
+that silently drops arrows and box-drawing glyphs, so a legend written with `↑↓←→` renders as gaps
+on the terminal most users are on. `SkillPickerTests` asserts every rendered character is printable
+ASCII; keep it passing rather than reaching for `Console.OutputEncoding`.
+
 **`--package` refuses floating versions and ranges.** Resolving one means choosing a version, and
 the only correct answer comes from a project's restore. `PackageCoordinate.Parse` is the gate.
 
@@ -106,6 +125,11 @@ someone stuck, it needs more words.
 Tests run offline and never invoke `dotnet`. Anything that needs the CLI goes through
 `IProcessRunner`, which `SkillSyncServiceTests` fakes — see `FakeDotnet` there for the pattern.
 Use `TempDirectory` for anything touching the file system; it cleans up after itself.
+
+The interactive picker goes through `ITerminal`, which `FakeTerminal` drives from a scripted key
+sequence and reads back as a screen buffer. It models a buffer rather than concatenating writes
+because the picker redraws in place, so appending every write would show frames stacked on top of
+each other instead of the one page a user sees.
 
 Name tests as a sentence describing the behaviour, not the method under test:
 

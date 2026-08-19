@@ -285,6 +285,103 @@ public class SkillSyncServiceTests
     }
 
     [Fact]
+    public void A_selection_installs_only_the_skills_that_were_chosen()
+    {
+        using var temp = new TempDirectory();
+        temp.CreateFile("MyApp.sln");
+        temp.CreatePackageWithSkill("Mockly", "1.10.0", "mockly");
+        temp.CreatePackageWithSkill("Contoso.Widgets", "2.3.0", "widget-usage");
+
+        var service = new SkillSyncService(new FakeDotnet(
+            temp.Combine("packages"),
+            Json(("Mockly", "1.10.0"), ("Contoso.Widgets", "2.3.0"))));
+
+        var request = Request(temp);
+        var discovered = service.Discover(request);
+        var chosen = discovered.Skills.Where(skill => skill.RelativePath == "mockly").ToList();
+
+        var result = service.Sync(request, discovered, new SkillChoice(chosen, []));
+
+        Assert.Equal("mockly", Assert.Single(result.Skills).RelativePath);
+        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "SKILL.md")));
+        Assert.False(Directory.Exists(temp.Combine(".agents", "skills", "widget-usage")));
+    }
+
+    [Fact]
+    public void Deselecting_an_installed_skill_removes_it_even_when_packages_were_named()
+    {
+        using var temp = new TempDirectory();
+        temp.CreatePackageWithSkill("Mockly", "1.10.0", "mockly");
+        temp.CreatePackageWithSkill("Contoso.Widgets", "2.3.0", "widget-usage");
+
+        var service = new SkillSyncService(new FakeDotnet(temp.Combine("packages"), Json()));
+        var request = Request(temp) with
+        {
+            Packages =
+            [
+                PackageCoordinate.Parse("Mockly@1.10.0"),
+                PackageCoordinate.Parse("Contoso.Widgets@2.3.0"),
+            ],
+        };
+
+        service.Sync(request);
+        Assert.True(File.Exists(temp.Combine(".agents", "skills", "widget-usage", "SKILL.md")));
+
+        // Naming packages never prunes, but turning a skill off in the picker is a decision
+        // about that skill, so it has to take effect here too.
+        var discovered = service.Discover(request);
+        var keep = discovered.Skills.Where(skill => skill.RelativePath == "mockly").ToList();
+
+        var result = service.Sync(request, discovered, new SkillChoice(keep, ["widget-usage"]));
+
+        Assert.Equal("widget-usage", Assert.Single(result.Removed).Skill);
+        Assert.False(Directory.Exists(temp.Combine(".agents", "skills", "widget-usage")));
+        Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "SKILL.md")));
+    }
+
+    [Fact]
+    public void A_selection_in_a_dry_run_writes_nothing()
+    {
+        using var temp = new TempDirectory();
+        temp.CreateFile("MyApp.sln");
+        temp.CreatePackageWithSkill("Mockly", "1.10.0", "mockly");
+
+        var service = new SkillSyncService(new FakeDotnet(temp.Combine("packages"), Json(("Mockly", "1.10.0"))));
+        var request = Request(temp) with { DryRun = true };
+        var discovered = service.Discover(request);
+
+        var result = service.Sync(request, discovered, new SkillChoice(discovered.Skills, []));
+
+        Assert.Single(result.Skills);
+        Assert.False(Directory.Exists(temp.Combine(".agents", "skills")));
+    }
+
+    [Fact]
+    public void Installed_skill_names_are_read_from_the_destination_manifest()
+    {
+        using var temp = new TempDirectory();
+        temp.CreateFile("MyApp.sln");
+        temp.CreatePackageWithSkill("Mockly", "1.10.0", "mockly");
+
+        var service = new SkillSyncService(new FakeDotnet(temp.Combine("packages"), Json(("Mockly", "1.10.0"))));
+        service.Sync(Request(temp));
+
+        var installed = SkillSyncService.InstalledSkillNames(temp.Combine(".agents", "skills"));
+
+        Assert.Contains("mockly", installed);
+        // Destination names compare case-insensitively everywhere else, so they must here too.
+        Assert.Contains("MOCKLY", installed);
+    }
+
+    [Fact]
+    public void Installed_skill_names_are_empty_for_a_destination_that_does_not_exist_yet()
+    {
+        using var temp = new TempDirectory();
+
+        Assert.Empty(SkillSyncService.InstalledSkillNames(temp.Combine("nowhere")));
+    }
+
+    [Fact]
     public void Uninstall_version_filter_leaves_another_version_installed()
     {
         using var temp = new TempDirectory();
