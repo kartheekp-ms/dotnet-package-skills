@@ -109,7 +109,20 @@ public sealed class SkillInstaller
                 .Concat(installed);
 
         manifest.SetSkills(next);
-        manifest.Save(destinationRoot);
+
+        if (manifest.Installed.Count == 0)
+        {
+            // Nothing is tracked, so there is nothing for the manifest to be the source of truth
+            // about. Match uninstall rather than leaving an empty manifest, and a destination
+            // folder, that the user never asked for. The folder only goes if it is empty, so
+            // skills they wrote themselves keep it alive.
+            InstallManifest.Delete(destinationRoot);
+            TryRemoveEmptyDirectory(destinationRoot);
+        }
+        else
+        {
+            manifest.Save(destinationRoot);
+        }
 
         return new InstallOutcome(accepted, removed, skipped);
     }

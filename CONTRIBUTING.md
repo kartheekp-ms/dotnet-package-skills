@@ -61,6 +61,11 @@ groups copied skill folder names under their package id and version; pruning and
 only on those names. Users keep their own hand-written skills in the same folder, and deleting one
 of those would be unforgivable.
 
+**No tracked skills means no manifest and no folder.** When the last entry goes, `sync` and
+`uninstall` both delete `.dotnet-package-skills.json` and drop the destination folder if it is
+empty, so a repository where nothing ships a skill never grows a stray `.agents/skills/`. The
+folder only goes when it is genuinely empty — hand-written skills keep it alive.
+
 **Don't read or interpret skill contents.** The tool identifies skill folders by structure and
 copies them. What a skill contains is the package author's business. An earlier version parsed
 SKILL.md frontmatter to show descriptions; it was removed because it added a YAML-shaped parsing

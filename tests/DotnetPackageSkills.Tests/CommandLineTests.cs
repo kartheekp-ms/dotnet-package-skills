@@ -27,6 +27,15 @@ public class CommandLineTests
     }
 
     [Fact]
+    public void Sync_accepts_interactive_alongside_a_named_package()
+    {
+        // One package can ship a dozen skills, so choosing among them is exactly the case
+        // --package plus --interactive exists for.
+        Assert.Empty(CommandLineBuilder.Build().Parse(["sync", "--package", "Mockly@1.10.0", "-i"]).Errors);
+        Assert.Empty(CommandLineBuilder.Build().Parse(["sync", "-i", "--package", "Mockly@1.10.0"]).Errors);
+    }
+
+    [Fact]
     public void List_does_not_offer_interactive_selection()
     {
         // list writes nothing, so there is nothing to choose between.

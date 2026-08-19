@@ -75,8 +75,12 @@ else alone. Only a target describes a complete set of packages, so only a target
 By default `sync` copies everything it finds. Add `--interactive` to choose:
 
 ```bash
-dotnet package-skills sync --interactive
+dotnet package-skills sync --interactive                          # everything the project references
+dotnet package-skills sync --package Mockly@1.10.0 --interactive  # just one package's skills
 ```
+
+It composes with `--target` and `--package`, so you can narrow to a single package first and then
+pick among the skills it ships — which is what you want when one package bundles a dozen of them.
 
 ```
 Skills for MyApp.slnx                                       page 1 of 3
@@ -123,7 +127,7 @@ see what a selection would change before committing to it.
 | `-d, --destination <PATH>` | all | Where skills are copied. Default `.agents/skills`. |
 | `--no-restore` | sync, list | Fail instead of restoring when the target has not been restored. |
 | `--global-packages <PATH>` | sync, list | Override the NuGet global packages folder. |
-| `-i, --interactive` | sync | Choose which skills to install, a page at a time. Not with `--json`. |
+| `-i, --interactive` | sync | Choose which skills to install, a page at a time. Combines with `--target` or `--package`. Not with `--json`. |
 | `-p, --package <ID[@VERSION]>` | uninstall | Remove only skills from this package — every version, or one. |
 | `--dry-run` | sync, uninstall | Report what would change without writing anything. |
 | `--json` | all | Machine-readable output, for scripts and agents. |

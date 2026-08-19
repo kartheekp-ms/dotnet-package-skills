@@ -154,6 +154,47 @@ public class SkillInstallerTests
     }
 
     [Fact]
+    public void Install_with_nothing_to_record_leaves_no_folder_behind()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+
+        // Most packages ship no skills, so this is the common outcome. It should not leave an
+        // empty skills folder in a repository that never had one.
+        _installer.Install(destination, [], dryRun: false);
+
+        Assert.False(Directory.Exists(destination));
+    }
+
+    [Fact]
+    public void Pruning_the_last_tracked_skill_removes_the_manifest_like_uninstall_does()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly")], dryRun: false);
+
+        _installer.Install(destination, [], dryRun: false);
+
+        Assert.False(File.Exists(Path.Combine(destination, InstallManifest.FileName)));
+        Assert.False(Directory.Exists(destination));
+    }
+
+    [Fact]
+    public void Pruning_everything_still_keeps_a_folder_holding_hand_authored_skills()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly")], dryRun: false);
+
+        var handAuthored = temp.CreateFile("dest/our-own-skill/SKILL.md", "ours");
+
+        _installer.Install(destination, [], dryRun: false);
+
+        Assert.False(File.Exists(Path.Combine(destination, InstallManifest.FileName)));
+        Assert.Equal("ours", File.ReadAllText(handAuthored));
+    }
+
+    [Fact]
     public void Install_never_touches_skills_it_did_not_install()
     {
         using var temp = new TempDirectory();

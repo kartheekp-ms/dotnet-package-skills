@@ -285,6 +285,37 @@ public class SkillSyncServiceTests
     }
 
     [Fact]
+    public void A_selection_can_take_only_some_of_one_packages_skills()
+    {
+        using var temp = new TempDirectory();
+        temp.CreatePackageWithSkill(
+            "Mockly",
+            "1.10.0",
+            "mockly-assertions",
+            "mockly-testing",
+            "mockly-usage",
+            "mockly-verification");
+
+        var service = new SkillSyncService(new FakeDotnet(temp.Combine("packages"), Json()));
+        var request = Request(temp) with { Packages = [PackageCoordinate.Parse("Mockly@1.10.0")] };
+
+        var discovered = service.Discover(request);
+        Assert.Equal(4, discovered.Skills.Count);
+
+        var chosen = discovered.Skills
+            .Where(skill => skill.RelativePath is "mockly-assertions" or "mockly-usage")
+            .ToList();
+
+        var result = service.Sync(request, discovered, new SkillChoice(chosen, []));
+
+        Assert.Equal(
+            ["mockly-assertions", "mockly-usage"],
+            result.Skills.Select(skill => skill.RelativePath));
+        Assert.False(Directory.Exists(temp.Combine(".agents", "skills", "mockly-testing")));
+        Assert.False(Directory.Exists(temp.Combine(".agents", "skills", "mockly-verification")));
+    }
+
+    [Fact]
     public void A_selection_installs_only_the_skills_that_were_chosen()
     {
         using var temp = new TempDirectory();
