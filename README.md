@@ -83,15 +83,15 @@ It composes with `--target` and `--package`, so you can narrow to a single packa
 pick among the skills it ships — which is what you want when one package bundles a dozen of them.
 
 ```
-Skills for MyApp.slnx                                       page 1 of 3
+Skills for MyApp.slnx  page 1 of 3
 
   up/down move   left/right page   space toggle
   a all   c none   enter confirm   esc cancel
 
-> [x] contoso.widgets-widget-usage      installed  Contoso.Widgets 2.3.0
-  [ ] contoso.widgets-widget-testing    new        Contoso.Widgets 2.3.0
-  [x] mockly-usage                      installed  Mockly 1.10.0
-  [ ] serilog-console-guidance          new        Serilog.Sinks.Console 5.0.1
+> [x] contoso.widgets-widget-usage    installed  Contoso.Widgets 2.3.0
+  [ ] contoso.widgets-widget-testing  new        Contoso.Widgets 2.3.0
+  [x] mockly-usage                    installed  Mockly 1.10.0
+  [ ] serilog-console-guidance        new        Serilog.Sinks.Console 5.0.1
 
   2 of 24 selected   1 to remove
 ```
@@ -108,8 +108,12 @@ The legend shows the keys you need; these all work:
 | `enter` | Confirm the selection |
 | `esc` / `q` | Cancel, changing nothing |
 
-Ten skills a page, because a list long enough to scroll off the top is a list nobody reads before
-agreeing to it. Skills you already have start selected, so pressing enter straight away changes
+The frame is sized to what it holds. At most ten skills a page, because a list long enough to
+scroll off the top is a list nobody reads before agreeing to it — but a repository with one skill
+gets a four-line prompt, not a screenful of blank rows. Keys that would do nothing are left out:
+no page counter when there is only one page, no movement keys when there is only one skill.
+
+Skills you already have start selected, so pressing enter straight away changes
 nothing and a new skill is always an explicit opt-in.
 
 **Turning off a skill you already have deletes it** — including under `--package`, where sync is

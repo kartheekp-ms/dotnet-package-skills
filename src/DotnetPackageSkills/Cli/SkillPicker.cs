@@ -27,14 +27,36 @@ internal sealed class SkillPicker(ITerminal terminal)
     private const string InstalledLabel = "installed";
     private const string NewLabel = "new";
 
+    private const string ActionHelp = "a all   c none   enter confirm   esc cancel";
+
     /// <summary>
+    /// Builds the movement legend from the keys that actually do something here. Offering
+    /// "left/right page" on a single page, or "up/down move" on a single skill, teaches the
+    /// reader a control that does nothing when they try it.
+    /// </summary>
+    /// <remarks>
     /// Deliberately ASCII. Windows consoles default to an OEM code page that silently drops
     /// arrows and box-drawing glyphs, so a prettier legend renders as gaps on exactly the
     /// terminal most users are on.
-    /// </summary>
-    private const string NavigationHelp = "up/down move   left/right page   space toggle";
+    /// </remarks>
+    private static string NavigationHelp(int itemCount, int pages)
+    {
+        var keys = new List<string>(3);
 
-    private const string ActionHelp = "a all   c none   enter confirm   esc cancel";
+        if (itemCount > 1)
+        {
+            keys.Add("up/down move");
+        }
+
+        if (pages > 1)
+        {
+            keys.Add("left/right page");
+        }
+
+        keys.Add("space toggle");
+
+        return string.Join("   ", keys);
+    }
 
     /// <summary>
     /// Runs the picker. Returns null when the user cancelled, in which case nothing should be
@@ -61,8 +83,7 @@ internal sealed class SkillPicker(ITerminal terminal)
                 .Where(entry => entry.item.Installed)
                 .Select(entry => entry.index));
 
-        var pageSize = PageSize();
-        var nameWidth = NameWidth(items);
+        var layout = Layout.For(terminal, items, title);
         var cursor = 0;
 
         terminal.CursorVisible = false;
@@ -70,11 +91,11 @@ internal sealed class SkillPicker(ITerminal terminal)
         try
         {
             // Scroll once up front so the frame's top row stays put for every later redraw.
-            var frameTop = Reserve(pageSize + ChromeRows);
+            var frameTop = Reserve(layout.PageSize + ChromeRows);
 
             while (true)
             {
-                Render(items, selected, cursor, pageSize, nameWidth, title, frameTop);
+                Render(items, selected, cursor, layout, title, frameTop);
 
                 var key = terminal.ReadKey();
 
@@ -87,10 +108,10 @@ internal sealed class SkillPicker(ITerminal terminal)
                         cursor = (cursor + 1) % items.Count;
                         break;
                     case ConsoleKey.LeftArrow or ConsoleKey.PageUp:
-                        cursor = Math.Max(0, cursor - pageSize);
+                        cursor = Math.Max(0, cursor - layout.PageSize);
                         break;
                     case ConsoleKey.RightArrow or ConsoleKey.PageDown:
-                        cursor = Math.Min(items.Count - 1, cursor + pageSize);
+                        cursor = Math.Min(items.Count - 1, cursor + layout.PageSize);
                         break;
                     case ConsoleKey.Home:
                         cursor = 0;
@@ -112,11 +133,11 @@ internal sealed class SkillPicker(ITerminal terminal)
                         selected.Clear();
                         break;
                     case ConsoleKey.Enter:
-                        Render(items, selected, cursor, pageSize, nameWidth, title, frameTop);
-                        Close(frameTop + pageSize + ChromeRows);
+                        Render(items, selected, cursor, layout, title, frameTop);
+                        Close(frameTop + layout.PageSize + ChromeRows);
                         return Result(items, selected);
                     case ConsoleKey.Escape or ConsoleKey.Q:
-                        Close(frameTop + pageSize + ChromeRows);
+                        Close(frameTop + layout.PageSize + ChromeRows);
                         return null;
                 }
             }
@@ -160,31 +181,32 @@ internal sealed class SkillPicker(ITerminal terminal)
         IReadOnlyList<SkillPickerItem> items,
         HashSet<int> selected,
         int cursor,
-        int pageSize,
-        int nameWidth,
+        Layout layout,
         string title,
         int frameTop)
     {
-        var page = cursor / pageSize;
-        var pages = (items.Count + pageSize - 1) / pageSize;
-        var first = page * pageSize;
-        var width = Math.Max(20, terminal.WindowWidth);
+        var page = cursor / layout.PageSize;
+        var first = page * layout.PageSize;
+        var width = layout.Width;
 
         terminal.SetCursorPosition(0, frameTop);
 
-        WriteRow(Spread(title, $"page {page + 1} of {pages}", width), width);
+        // A lone page has no "other" page to be on, so the counter is noise.
+        WriteRow(
+            layout.Pages > 1 ? Spread(title, $"page {page + 1} of {layout.Pages}", width) : title,
+            width);
         WriteRow(string.Empty, width);
-        WriteRow($"  {NavigationHelp}", width);
+        WriteRow($"  {NavigationHelp(items.Count, layout.Pages)}", width);
         WriteRow($"  {ActionHelp}", width);
         WriteRow(string.Empty, width);
 
-        for (var row = 0; row < pageSize; row++)
+        for (var row = 0; row < layout.PageSize; row++)
         {
             var index = first + row;
 
             WriteRow(
                 index < items.Count
-                    ? Row(items[index], index == cursor, selected.Contains(index), nameWidth)
+                    ? Row(items[index], index == cursor, selected.Contains(index), layout.NameWidth)
                     : string.Empty,
                 width);
         }
@@ -211,14 +233,15 @@ internal sealed class SkillPicker(ITerminal terminal)
     }
 
     /// <summary>
-    /// Pads a row to just short of the window width, which erases whatever the previous frame
-    /// left on that line without triggering the automatic wrap a full-width line causes.
+    /// Pads a row to the frame width, which erases whatever the previous frame left on that
+    /// line. The width is content-derived and always narrower than the window, so this never
+    /// triggers the automatic wrap a full-width line causes.
     /// </summary>
-    private void WriteRow(string text, int width) => terminal.WriteLine(Fit(text, width - 1).PadRight(width - 1));
+    private void WriteRow(string text, int width) => terminal.WriteLine(Fit(text, width).PadRight(width));
 
     private static string Spread(string left, string right, int width)
     {
-        var gap = width - 1 - left.Length - right.Length;
+        var gap = width - left.Length - right.Length;
         return gap > 1 ? $"{left}{new string(' ', gap)}{right}" : $"{left}  {right}";
     }
 
@@ -230,9 +253,53 @@ internal sealed class SkillPicker(ITerminal terminal)
         _ => text[..(width - 3)] + "...",
     };
 
-    private int PageSize() =>
-        Math.Clamp(terminal.WindowHeight - ChromeRows - 1, 1, MaxPageSize);
-
-    private static int NameWidth(IReadOnlyList<SkillPickerItem> items) =>
+    private static int MeasureNameWidth(IReadOnlyList<SkillPickerItem> items) =>
         Math.Min(MaxNameWidth, items.Max(item => item.Skill.RelativePath.Length));
+
+    /// <summary>Frame dimensions, measured once so every redraw lands on the same grid.</summary>
+    /// <param name="PageSize">Skill rows shown at once.</param>
+    /// <param name="Pages">Total pages, which decides whether paging chrome is worth showing.</param>
+    /// <param name="NameWidth">Width of the skill-name column.</param>
+    /// <param name="Width">
+    /// Width every row is padded to. Derived from the content rather than the window, so the
+    /// page counter sits beside the title instead of stranded at the far edge of a wide
+    /// terminal, and no row trails padding past the text it belongs to.
+    /// </param>
+    private sealed record Layout(int PageSize, int Pages, int NameWidth, int Width)
+    {
+        public static Layout For(ITerminal terminal, IReadOnlyList<SkillPickerItem> items, string title)
+        {
+            // As many rows as fit, but never more than there are skills. Padding a short list
+            // out to a full page is what left a single skill stranded above blank lines.
+            var pageSize = Math.Clamp(
+                terminal.WindowHeight - ChromeRows - 1,
+                1,
+                Math.Min(MaxPageSize, items.Count));
+
+            var pages = (items.Count + pageSize - 1) / pageSize;
+            var nameWidth = MeasureNameWidth(items);
+
+            // Measure the widest line any frame could produce. Anything narrower would leave
+            // characters from a previous frame behind when a later one is shorter.
+            var content = new List<int>
+            {
+                pages > 1 ? title.Length + 2 + $"page {pages} of {pages}".Length : title.Length,
+                NavigationHelp(items.Count, pages).Length + 2,
+                ActionHelp.Length + 2,
+                WidestSummary(items.Count) + 2,
+            };
+
+            content.AddRange(items.Select(item => Row(item, focused: true, isSelected: true, nameWidth).Length));
+
+            // Stay a column short of the window so a full-width line cannot wrap.
+            return new Layout(pageSize, pages, nameWidth, Math.Min(content.Max(), Math.Max(20, terminal.WindowWidth) - 1));
+        }
+
+        /// <summary>
+        /// Longest the summary can grow: every count at its maximum, with the removal clause
+        /// present. Measured rather than observed, because the live summary shrinks and grows.
+        /// </summary>
+        private static int WidestSummary(int itemCount) =>
+            $"{itemCount} of {itemCount} selected   {itemCount} to remove".Length;
+    }
 }

@@ -92,6 +92,14 @@ list can never scroll off the top unread — agreeing to skills you did not see 
 worth designing against. It never reads a `SKILL.md`; it shows the folder name, package, and
 version already on `BundledSkill`.
 
+**The frame is measured from its contents, not the window.** `SkillPicker.Layout` sizes the page
+to the number of skills and the width to the longest line any frame could produce. Reserving a
+full page regardless left a single skill stranded above nine blank rows, and padding to the window
+stranded the page counter at the far edge of a wide terminal. Rows are still padded to that
+measured width — that padding is what erases the previous frame, so narrowing it further would
+leave characters behind. Chrome that would do nothing is dropped: no counter on a single page, no
+movement keys for a single skill.
+
 **The picker frame is ASCII, and stays that way.** Windows consoles default to an OEM code page
 that silently drops arrows and box-drawing glyphs, so a legend written with `↑↓←→` renders as gaps
 on the terminal most users are on. `SkillPickerTests` asserts every rendered character is printable

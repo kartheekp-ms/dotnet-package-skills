@@ -232,6 +232,160 @@ public class SkillPickerTests
     }
 
     [Fact]
+    public void The_frame_is_only_as_wide_as_its_content_on_a_wide_terminal()
+    {
+        var terminal = new FakeTerminal(windowWidth: 200).Press(ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(3), Title);
+
+        // Padding every row out to the window would strand the page counter at the far edge
+        // and trail whitespace far past the text it belongs to.
+        Assert.All(
+            terminal.Frames[0].Split(Environment.NewLine),
+            line => Assert.True(line.Length < 80, $"line is {line.Length} columns wide: '{line}'"));
+    }
+
+    [Fact]
+    public void The_page_counter_sits_beside_the_title_not_at_the_far_edge()
+    {
+        var terminal = new FakeTerminal(windowWidth: 200).Press(ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(24), Title);
+
+        var header = terminal.Frames[0].Split(Environment.NewLine)[0];
+        Assert.EndsWith("page 1 of 3", header.TrimEnd());
+        Assert.True(header.TrimEnd().Length < 80, $"header is {header.TrimEnd().Length} columns wide");
+    }
+
+    [Fact]
+    public void A_long_skill_name_still_widens_the_frame_to_fit()
+    {
+        var terminal = new FakeTerminal(windowWidth: 200).Press(ConsoleKey.Enter);
+        var name = new string('x', 40);
+
+        new SkillPicker(terminal).Choose(
+            [
+                new SkillPickerItem(
+                    new BundledSkill("Some.Package", "1.0.0", name, $"/p/{name}", name),
+                    Installed: false),
+            ],
+            Title);
+
+        Assert.Contains(name, terminal.Frames[0]);
+    }
+
+    [Fact]
+    public void Rows_are_padded_so_a_shorter_frame_cannot_leave_the_previous_one_behind()
+    {
+        // Selecting shrinks the summary from "N to remove" back to nothing; the padding is
+        // what stops the old, longer text showing through.
+        var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(3, installed: [1]), Title);
+
+        var lengths = terminal.Frames[0].Split(Environment.NewLine).Select(line => line.Length).Distinct();
+        Assert.Single(lengths);
+    }
+
+    [Fact]
+    public void A_single_skill_does_not_leave_a_page_of_blank_rows_behind_it()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(1), Title);
+
+        // One skill plus seven rows of chrome. Padding out to a full page is what stranded
+        // the skill above most of a screen of nothing.
+        Assert.Equal(8, terminal.Frames[0].Split(Environment.NewLine).Length);
+    }
+
+    [Fact]
+    public void A_short_list_shrinks_the_frame_to_fit_it()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(3), Title);
+
+        Assert.Equal(10, terminal.Frames[0].Split(Environment.NewLine).Length);
+    }
+
+    [Fact]
+    public void A_list_longer_than_a_page_still_fills_the_page()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(24), Title);
+
+        Assert.Equal(17, terminal.Frames[0].Split(Environment.NewLine).Length);
+    }
+
+    [Fact]
+    public void One_page_of_skills_shows_no_page_counter()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(4), Title);
+
+        var frame = terminal.Frames[0];
+        Assert.Contains(Title, frame);
+        Assert.DoesNotContain("page 1 of 1", frame);
+        // Nothing to page to, so offering the key would teach a control that does nothing.
+        Assert.DoesNotContain("left/right page", frame);
+        Assert.Contains("up/down move", frame);
+    }
+
+    [Fact]
+    public void A_single_skill_offers_neither_paging_nor_movement()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(1), Title);
+
+        var frame = terminal.Frames[0];
+        Assert.DoesNotContain("up/down move", frame);
+        Assert.DoesNotContain("left/right page", frame);
+        Assert.Contains("space toggle", frame);
+        Assert.Contains("enter confirm", frame);
+    }
+
+    [Fact]
+    public void More_than_one_page_still_shows_the_counter_and_the_paging_key()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(24), Title);
+
+        var frame = terminal.Frames[0];
+        Assert.Contains("page 1 of 3", frame);
+        Assert.Contains("left/right page", frame);
+    }
+
+    [Fact]
+    public void A_single_skill_can_still_be_toggled_and_confirmed()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
+
+        var choice = new SkillPicker(terminal).Choose(Items(1, installed: [1]), Title);
+
+        Assert.NotNull(choice);
+        Assert.Empty(choice.Selected);
+        Assert.Equal("skill-01", Assert.Single(choice.Deselected));
+    }
+
+    [Fact]
+    public void Moving_within_a_single_page_never_leaves_it()
+    {
+        var terminal = new FakeTerminal()
+            .Press(ConsoleKey.DownArrow, ConsoleKey.DownArrow, ConsoleKey.RightArrow, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(3), Title);
+
+        Assert.All(
+            terminal.Frames,
+            frame => Assert.Equal(10, frame.Split(Environment.NewLine).Length));
+    }
+
+    [Fact]
     public void The_frame_never_grows_beyond_the_rows_it_reserved()
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.DownArrow, times: 30).Press(ConsoleKey.Enter);
