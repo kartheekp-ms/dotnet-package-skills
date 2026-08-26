@@ -110,8 +110,9 @@ The legend shows the keys you need; these all work:
 
 The frame is sized to what it holds. At most ten skills a page, because a list long enough to
 scroll off the top is a list nobody reads before agreeing to it — but a repository with one skill
-gets a four-line prompt, not a screenful of blank rows. Keys that would do nothing are left out:
-no page counter when there is only one page, no movement keys when there is only one skill.
+gets a four-line prompt, not a screenful of blank rows, and a last page with two skills ends after
+the second. Keys that would do nothing are left out: no page counter when there is only one page,
+no movement keys when there is only one skill.
 
 Skills you already have start selected, so pressing enter straight away changes
 nothing and a new skill is always an explicit opt-in.

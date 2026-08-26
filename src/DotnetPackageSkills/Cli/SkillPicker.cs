@@ -92,10 +92,11 @@ internal sealed class SkillPicker(ITerminal terminal)
         {
             // Scroll once up front so the frame's top row stays put for every later redraw.
             var frameTop = Reserve(layout.PageSize + ChromeRows);
+            var height = 0;
 
             while (true)
             {
-                Render(items, selected, cursor, layout, title, frameTop);
+                height = Render(items, selected, cursor, layout, title, frameTop);
 
                 var key = terminal.ReadKey();
 
@@ -133,11 +134,11 @@ internal sealed class SkillPicker(ITerminal terminal)
                         selected.Clear();
                         break;
                     case ConsoleKey.Enter:
-                        Render(items, selected, cursor, layout, title, frameTop);
-                        Close(frameTop + layout.PageSize + ChromeRows);
+                        height = Render(items, selected, cursor, layout, title, frameTop);
+                        Close(frameTop + height);
                         return Result(items, selected);
                     case ConsoleKey.Escape or ConsoleKey.Q:
-                        Close(frameTop + layout.PageSize + ChromeRows);
+                        Close(frameTop + height);
                         return null;
                 }
             }
@@ -177,7 +178,13 @@ internal sealed class SkillPicker(ITerminal terminal)
         terminal.WriteLine();
     }
 
-    private void Render(
+    /// <summary>Draws one frame at <paramref name="frameTop"/> and reports how many rows it used.</summary>
+    /// <remarks>
+    /// A partial last page draws only the skills it has, so the summary follows the final skill
+    /// instead of a run of blanks. Rows an earlier, taller frame wrote below this one are then
+    /// blanked, because in-place redrawing can only erase by overwriting.
+    /// </remarks>
+    private int Render(
         IReadOnlyList<SkillPickerItem> items,
         HashSet<int> selected,
         int cursor,
@@ -187,6 +194,7 @@ internal sealed class SkillPicker(ITerminal terminal)
     {
         var page = cursor / layout.PageSize;
         var first = page * layout.PageSize;
+        var rows = Math.Min(layout.PageSize, items.Count - first);
         var width = layout.Width;
 
         terminal.SetCursorPosition(0, frameTop);
@@ -200,19 +208,23 @@ internal sealed class SkillPicker(ITerminal terminal)
         WriteRow($"  {ActionHelp}", width);
         WriteRow(string.Empty, width);
 
-        for (var row = 0; row < layout.PageSize; row++)
+        for (var row = 0; row < rows; row++)
         {
             var index = first + row;
-
-            WriteRow(
-                index < items.Count
-                    ? Row(items[index], index == cursor, selected.Contains(index), layout.NameWidth)
-                    : string.Empty,
-                width);
+            WriteRow(Row(items[index], index == cursor, selected.Contains(index), layout.NameWidth), width);
         }
 
         WriteRow(string.Empty, width);
         WriteRow($"  {Summary(items, selected)}", width);
+
+        var height = ChromeRows + rows;
+
+        for (var row = height; row < layout.PageSize + ChromeRows; row++)
+        {
+            WriteRow(string.Empty, width);
+        }
+
+        return height;
     }
 
     private static string Row(SkillPickerItem item, bool focused, bool isSelected, int nameWidth) =>

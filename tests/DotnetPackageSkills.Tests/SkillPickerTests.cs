@@ -232,6 +232,66 @@ public class SkillPickerTests
     }
 
     [Fact]
+    public void A_partial_last_page_puts_the_summary_under_its_final_skill()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.RightArrow, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(12), Title);
+
+        var lines = terminal.Frames[1].Split(Environment.NewLine);
+        var lastSkill = Array.FindIndex(lines, line => line.Contains("skill-12", StringComparison.Ordinal));
+        var summary = Array.FindIndex(lines, line => line.Contains("of 12 selected", StringComparison.Ordinal));
+
+        Assert.True(lastSkill > 0, "the last skill should be on the page");
+        // One blank separator and nothing else: the two-skill page must not be padded out to ten.
+        Assert.Equal(lastSkill + 2, summary);
+    }
+
+    [Fact]
+    public void Paging_to_a_shorter_page_erases_what_the_taller_one_left_behind()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.RightArrow, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(12), Title);
+
+        // In-place redrawing can only erase by overwriting, so page one's rows have to be
+        // blanked rather than simply skipped.
+        var frame = terminal.Frames[1];
+        Assert.DoesNotContain("skill-01", frame);
+        Assert.DoesNotContain("skill-10", frame);
+        Assert.Contains("skill-11", frame);
+        Assert.Contains("skill-12", frame);
+    }
+
+    [Fact]
+    public void Paging_back_to_a_full_page_redraws_every_row()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.RightArrow, ConsoleKey.LeftArrow, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(12), Title);
+
+        var frame = terminal.Frames[2];
+        Assert.Contains("skill-01", frame);
+        Assert.Contains("skill-10", frame);
+        Assert.DoesNotContain("skill-11", frame);
+    }
+
+    [Fact]
+    public void A_full_last_page_is_unchanged_by_the_partial_page_handling()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.End, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(20), Title);
+
+        var lines = terminal.Frames[1].Split(Environment.NewLine);
+        var lastSkill = Array.FindIndex(lines, line => line.Contains("skill-20", StringComparison.Ordinal));
+        var summary = Array.FindIndex(lines, line => line.Contains("of 20 selected", StringComparison.Ordinal));
+
+        Assert.Equal(lastSkill + 2, summary);
+        Assert.Contains("page 2 of 2", terminal.Frames[1]);
+    }
+
+    [Fact]
     public void The_frame_is_only_as_wide_as_its_content_on_a_wide_terminal()
     {
         var terminal = new FakeTerminal(windowWidth: 200).Press(ConsoleKey.Enter);
