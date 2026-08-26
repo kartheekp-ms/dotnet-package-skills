@@ -19,6 +19,12 @@ internal interface ITerminal
 
     bool CursorVisible { set; }
 
+    /// <summary>
+    /// When true, Ctrl+C arrives through <see cref="ReadKey"/> instead of killing the process,
+    /// so the picker can leave the terminal as it found it.
+    /// </summary>
+    bool TreatControlCAsInput { set; }
+
     void SetCursorPosition(int left, int top);
 
     void WriteLine(string text = "");
@@ -49,6 +55,13 @@ internal sealed class SystemTerminal : ITerminal
         // Hiding the cursor is a courtesy, not a requirement, and the setter throws on hosts
         // that do not support it. Failing the whole sync over a cosmetic detail would be absurd.
         set => Ignoring(() => Console.CursorVisible = value);
+    }
+
+    public bool TreatControlCAsInput
+    {
+        // Unsupported on some hosts, and the picker still exits cleanly without it — Ctrl+C
+        // just terminates the process instead of being handled as a cancel.
+        set => Ignoring(() => Console.TreatControlCAsInput = value);
     }
 
     public void SetCursorPosition(int left, int top) =>

@@ -88,6 +88,11 @@ internal sealed class SkillPicker(ITerminal terminal)
 
         terminal.CursorVisible = false;
 
+        // Take Ctrl+C as a key so it cancels through the same path as esc. Left to the
+        // runtime it kills the process mid-frame, skipping the restore below and leaving
+        // the user with a hidden cursor.
+        terminal.TreatControlCAsInput = true;
+
         try
         {
             // Scroll once up front so the frame's top row stays put for every later redraw.
@@ -99,6 +104,14 @@ internal sealed class SkillPicker(ITerminal terminal)
                 height = Render(items, selected, cursor, layout, title, frameTop);
 
                 var key = terminal.ReadKey();
+
+                // 'c' clears the selection, so the modifier has to be tested before the
+                // switch below reaches that case.
+                if (key.Key == ConsoleKey.C && (key.Modifiers & ConsoleModifiers.Control) != 0)
+                {
+                    Close(frameTop + height);
+                    return null;
+                }
 
                 switch (key.Key)
                 {
@@ -146,6 +159,7 @@ internal sealed class SkillPicker(ITerminal terminal)
         finally
         {
             terminal.CursorVisible = true;
+            terminal.TreatControlCAsInput = false;
         }
     }
 
@@ -223,6 +237,11 @@ internal sealed class SkillPicker(ITerminal terminal)
         {
             WriteRow(string.Empty, width);
         }
+
+        // Park just below the content. Anything that ends the process without unwinding —
+        // Ctrl+C on a host that will not hand it to us — then leaves the shell prompt against
+        // the summary rather than at the bottom of the rows this frame reserved.
+        terminal.SetCursorPosition(0, frameTop + height);
 
         return height;
     }

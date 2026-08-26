@@ -105,6 +105,16 @@ to erase without ANSI. And the widest possible summary is measured rather than t
 since the removal clause appears and disappears as you select. Chrome that would do nothing is
 dropped: no counter on a single page, no movement keys for a single skill.
 
+**The picker owns the terminal, so it has to hand it back.** `Choose` hides the cursor and takes
+Ctrl+C as input, and restores both in a `finally`. Ctrl+C is why: left to the runtime it ends the
+process mid-frame, so the restore never runs and the user is left typing into a terminal with no
+cursor. Taken as a key it cancels through the same path as `esc`. Note the modifier is tested
+before the switch, because a bare `c` clears the selection.
+
+Every render also parks the cursor directly below the last line it drew, rather than at the bottom
+of the rows the frame reserved. That is what the shell prompt lands on if the process dies without
+unwinding — `SkillPickerTests` pins it, and the assertion fails if the parking is removed.
+
 **The picker frame is ASCII, and stays that way.** Windows consoles default to an OEM code page
 that silently drops arrows and box-drawing glyphs, so a legend written with `↑↓←→` renders as gaps
 on the terminal most users are on. `SkillPickerTests` asserts every rendered character is printable

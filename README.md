@@ -106,7 +106,7 @@ The legend shows the keys you need; these all work:
 | `space` | Toggle the highlighted skill |
 | `a` / `c` | Select all / clear all, across every page |
 | `enter` | Confirm the selection |
-| `esc` / `q` | Cancel, changing nothing |
+| `esc` / `q` / `ctrl+c` | Cancel, changing nothing |
 
 The frame is sized to what it holds. At most ten skills a page, because a list long enough to
 scroll off the top is a list nobody reads before agreeing to it — but a repository with one skill

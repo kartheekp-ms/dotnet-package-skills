@@ -193,6 +193,93 @@ public class SkillPickerTests
     }
 
     [Fact]
+    public void Ctrl_c_cancels_without_choosing_anything()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.A).PressWith(ConsoleModifiers.Control, ConsoleKey.C);
+
+        Assert.Null(new SkillPicker(terminal).Choose(Items(24), Title));
+    }
+
+    [Fact]
+    public void Ctrl_c_is_not_mistaken_for_the_clear_all_key()
+    {
+        var terminal = new FakeTerminal().PressWith(ConsoleModifiers.Control, ConsoleKey.C);
+
+        // A bare 'c' clears the selection and keeps going, so the modifier has to win.
+        Assert.Null(new SkillPicker(terminal).Choose(Items(5, installed: [1, 2]), Title));
+    }
+
+    [Fact]
+    public void Ctrl_c_restores_the_terminal_on_the_way_out()
+    {
+        var terminal = new FakeTerminal().PressWith(ConsoleModifiers.Control, ConsoleKey.C);
+
+        new SkillPicker(terminal).Choose(Items(24), Title);
+
+        Assert.True(terminal.IsCursorVisible);
+        Assert.False(terminal.IsControlCTakenAsInput);
+    }
+
+    [Fact]
+    public void Ctrl_c_is_taken_as_a_key_rather_than_killing_the_process()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Escape);
+
+        new SkillPicker(terminal).Choose(Items(3), Title);
+
+        // Left to the runtime, Ctrl+C ends the process mid-frame and the cursor is never
+        // put back. Capturing it is what makes the restore reachable at all.
+        Assert.True(terminal.ControlCWasEverTakenAsInput);
+        Assert.False(terminal.IsControlCTakenAsInput);
+    }
+
+    [Fact]
+    public void Cancelling_on_a_partial_page_leaves_the_cursor_under_the_summary()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.RightArrow);
+        terminal.PressWith(ConsoleModifiers.Control, ConsoleKey.C);
+
+        new SkillPicker(terminal).Choose(Items(12), Title);
+
+        // Two skills plus seven rows of chrome, then the blank line Close writes. Landing
+        // any lower is the gap of empty rows a shell prompt used to be pushed into.
+        Assert.Equal(10, terminal.FinalCursorTop);
+    }
+
+    [Fact]
+    public void A_partial_page_parks_the_cursor_under_the_summary_while_it_waits()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.RightArrow, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(12), Title);
+
+        // Where the cursor rests between keys is where a prompt lands if the process is
+        // killed outright, which is what Ctrl+C does on a host that will not hand it over.
+        // Leaving it at the bottom of the reserved rows is the whitespace bug itself.
+        Assert.Equal(9, terminal.CursorTopAwaitingKey);
+    }
+
+    [Fact]
+    public void A_full_page_parks_the_cursor_under_the_summary_while_it_waits()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(12), Title);
+
+        Assert.Equal(17, terminal.CursorTopAwaitingKey);
+    }
+
+    [Fact]
+    public void Cancelling_on_a_full_page_leaves_the_cursor_under_the_summary()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Escape);
+
+        new SkillPicker(terminal).Choose(Items(12), Title);
+
+        Assert.Equal(18, terminal.FinalCursorTop);
+    }
+
+    [Fact]
     public void Escape_cancels_without_choosing_anything()
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.A, ConsoleKey.Escape);
