@@ -19,8 +19,17 @@ internal sealed class SkillPicker(ITerminal terminal)
     /// <summary>Frame rows that are not skills: title, help, status, and their blank separators.</summary>
     private const int ChromeRows = 7;
 
-    /// <summary>Widest the skill name column grows before names are truncated.</summary>
-    private const int MaxNameWidth = 44;
+    /// <summary>
+    /// Columns a skill row spends on everything except the name and the package: the cursor
+    /// and checkbox that open it, and the gaps either side of the installed/new label.
+    /// </summary>
+    private const int RowFurniture = 6 + 2 + 2;
+
+    /// <summary>
+    /// Narrowest the name column is allowed to get before it stops giving ground to the
+    /// package column. Below this a truncated name says nothing useful.
+    /// </summary>
+    private const int MinNameWidth = 12;
 
     private const string InstalledLabel = "installed";
     private const string NewLabel = "new";
@@ -303,8 +312,24 @@ internal sealed class SkillPicker(ITerminal terminal)
         _ => text[..(width - 3)] + "...",
     };
 
-    private static int MeasureNameWidth(IReadOnlyList<SkillPickerItem> items) =>
-        Math.Min(MaxNameWidth, items.Max(item => item.Skill.RelativePath.Length));
+    /// <summary>
+    /// Width of the skill-name column: as wide as the longest name, unless the terminal is too
+    /// narrow to carry that alongside the package it came from.
+    /// </summary>
+    /// <remarks>
+    /// This used to be capped at a constant, so a wide terminal still truncated a long name
+    /// with a screenful of empty space to its right. The only real limit is the window.
+    /// </remarks>
+    private static int MeasureNameWidth(IReadOnlyList<SkillPickerItem> items, int windowWidth)
+    {
+        var longestName = items.Max(item => item.Skill.RelativePath.Length);
+        var longestPackage = items.Max(item =>
+            item.Skill.PackageId.Length + 1 + item.Skill.PackageVersion.Length);
+
+        var available = windowWidth - 1 - RowFurniture - InstalledLabel.Length - longestPackage;
+
+        return Math.Min(longestName, Math.Max(MinNameWidth, available));
+    }
 
     /// <summary>Frame dimensions, measured once so every redraw lands on the same grid.</summary>
     /// <param name="PageSize">Skill rows shown at once.</param>
@@ -328,7 +353,8 @@ internal sealed class SkillPicker(ITerminal terminal)
                 items.Count);
 
             var pages = (items.Count + pageSize - 1) / pageSize;
-            var nameWidth = MeasureNameWidth(items);
+            var windowWidth = Math.Max(20, terminal.WindowWidth);
+            var nameWidth = MeasureNameWidth(items, windowWidth);
 
             // Measure the widest line any frame could produce. Anything narrower would leave
             // characters from a previous frame behind when a later one is shorter.
@@ -343,7 +369,7 @@ internal sealed class SkillPicker(ITerminal terminal)
             content.AddRange(items.Select(item => Row(item, focused: true, isSelected: true, nameWidth).Length));
 
             // Stay a column short of the window so a full-width line cannot wrap.
-            return new Layout(pageSize, pages, nameWidth, Math.Min(content.Max(), Math.Max(20, terminal.WindowWidth) - 1));
+            return new Layout(pageSize, pages, nameWidth, Math.Min(content.Max(), windowWidth - 1));
         }
 
         /// <summary>

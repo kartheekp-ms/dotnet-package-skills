@@ -461,6 +461,76 @@ public class SkillPickerTests
     }
 
     [Fact]
+    public void A_name_far_longer_than_any_constant_survives_on_a_wide_terminal()
+    {
+        var terminal = new FakeTerminal(windowWidth: 200).Press(ConsoleKey.Enter);
+
+        // The column used to stop at a hardcoded 44, so this lost its tail with most of the
+        // window still empty beside it. The terminal is the only thing that gets to decide.
+        var name = "contoso.widgets-extremely-long-skill-name-that-keeps-going-and-going";
+
+        new SkillPicker(terminal).Choose(
+            [
+                new SkillPickerItem(
+                    new BundledSkill("Contoso.Widgets", "2.3.0", name, $"/p/{name}", name),
+                    Installed: false),
+            ],
+            Title);
+
+        Assert.Contains(name, terminal.Frames[0]);
+        Assert.DoesNotContain("...", terminal.Frames[0]);
+    }
+
+    [Fact]
+    public void A_narrow_terminal_truncates_the_name_rather_than_overflowing_the_row()
+    {
+        var terminal = new FakeTerminal(windowWidth: 50).Press(ConsoleKey.Enter);
+        var name = "contoso.widgets-extremely-long-skill-name-that-keeps-going";
+
+        new SkillPicker(terminal).Choose(
+            [
+                new SkillPickerItem(
+                    new BundledSkill("Contoso.Widgets", "2.3.0", name, $"/p/{name}", name),
+                    Installed: false),
+            ],
+            Title);
+
+        var frame = terminal.Frames[0];
+        Assert.Contains("...", frame);
+        Assert.All(
+            frame.Split(Environment.NewLine),
+            line => Assert.True(line.Length < 50, $"'{line}' is {line.Length} columns wide"));
+    }
+
+    [Fact]
+    public void The_name_column_grows_with_the_terminal()
+    {
+        const string Name = "contoso.widgets-a-name-of-some-considerable-length-indeed";
+
+        static int LabelColumnAt(int windowWidth)
+        {
+            var terminal = new FakeTerminal(windowWidth: windowWidth).Press(ConsoleKey.Enter);
+
+            new SkillPicker(terminal).Choose(
+                [
+                    new SkillPickerItem(
+                        new BundledSkill("Contoso.Widgets", "2.3.0", Name, "/p", Name),
+                        Installed: false),
+                ],
+                Title);
+
+            return terminal.Frames[0]
+                .Split(Environment.NewLine)
+                .Single(line => line.StartsWith("> [", StringComparison.Ordinal))
+                .IndexOf("new", StringComparison.Ordinal);
+        }
+
+        // Where the label starts is where the name column ends, so a wider window pushing it
+        // right is the column growing.
+        Assert.True(LabelColumnAt(120) > LabelColumnAt(60), "a wider terminal should give the name more room");
+    }
+
+    [Fact]
     public void Rows_are_padded_so_a_shorter_frame_cannot_leave_the_previous_one_behind()
     {
         // Selecting shrinks the summary from "N to remove" back to nothing; the padding is
