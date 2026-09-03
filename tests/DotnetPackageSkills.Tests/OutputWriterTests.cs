@@ -55,7 +55,7 @@ public class OutputWriterTests
 
         var report = output.ToString();
         Assert.Contains("Warning: skipped 1 colliding skill:", report);
-        Assert.Contains("from Beta.Widgets 2.0.0", report);
+        Assert.Contains("shared-skill (Beta.Widgets 2.0.0)", report);
         Assert.Contains("selected first", report);
     }
 

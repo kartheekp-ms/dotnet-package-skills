@@ -36,8 +36,7 @@ public sealed class OutputWriter(TextWriter output)
 
             foreach (var skill in result.Skills)
             {
-                output.WriteLine($"  {skill.RelativePath}");
-                output.WriteLine($"      from {skill.PackageId} {skill.PackageVersion}");
+                output.WriteLine($"  {Describe(skill.RelativePath, skill.PackageId, skill.PackageVersion)}");
             }
         }
         else if (result.SkillsDiscovered > 0)
@@ -66,7 +65,7 @@ public sealed class OutputWriter(TextWriter output)
 
             foreach (var entry in result.Removed)
             {
-                output.WriteLine($"  {entry.Skill}");
+                output.WriteLine($"  {Describe(entry.Skill, entry.Package, entry.Version)}");
             }
         }
 
@@ -110,8 +109,7 @@ public sealed class OutputWriter(TextWriter output)
 
         foreach (var skill in result.Skipped)
         {
-            output.WriteLine($"  {skill.RelativePath}");
-            output.WriteLine($"      from {skill.PackageId} {skill.PackageVersion}");
+            output.WriteLine($"  {Describe(skill.RelativePath, skill.PackageId, skill.PackageVersion)}");
             output.WriteLine($"      {skill.Reason}");
         }
     }
@@ -149,8 +147,7 @@ public sealed class OutputWriter(TextWriter output)
 
         foreach (var entry in removed)
         {
-            output.WriteLine($"  {entry.Skill}");
-            output.WriteLine($"      from {entry.Package} {entry.Version}");
+            output.WriteLine($"  {Describe(entry.Skill, entry.Package, entry.Version)}");
         }
     }
 
@@ -169,4 +166,13 @@ public sealed class OutputWriter(TextWriter output)
     }
 
     private static string Count(int value, string noun) => $"{value} {noun}{(value == 1 ? string.Empty : "s")}";
+
+    /// <summary>One skill on one line: the folder name, then who it came from.</summary>
+    /// <remarks>
+    /// This used to be two lines, with "from Package Version" indented underneath. That doubled
+    /// the length of every report to carry a word — "from" — that the brackets say for free, and
+    /// twelve skills read far more easily as twelve lines than as twenty-four.
+    /// </remarks>
+    private static string Describe(string skill, string package, string version) =>
+        $"{skill} ({package} {version})";
 }
