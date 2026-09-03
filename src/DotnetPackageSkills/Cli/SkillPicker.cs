@@ -15,8 +15,6 @@ internal sealed record SkillPickerItem(BundledSkill Skill, bool Installed);
 /// </remarks>
 internal sealed class SkillPicker(ITerminal terminal)
 {
-    /// <summary>Rows a page never exceeds, however tall the window is.</summary>
-    private const int MaxPageSize = 10;
 
     /// <summary>Frame rows that are not skills: title, help, status, and their blank separators.</summary>
     private const int ChromeRows = 7;
@@ -321,12 +319,13 @@ internal sealed class SkillPicker(ITerminal terminal)
     {
         public static Layout For(ITerminal terminal, IReadOnlyList<SkillPickerItem> items, string title)
         {
-            // As many rows as fit, but never more than there are skills. Padding a short list
+            // As many rows as the window has space for, and never more than there are skills.
+            // A fixed ceiling would page a list that already fits, and padding a short list
             // out to a full page is what left a single skill stranded above blank lines.
             var pageSize = Math.Clamp(
                 terminal.WindowHeight - ChromeRows - 1,
                 1,
-                Math.Min(MaxPageSize, items.Count));
+                items.Count);
 
             var pages = (items.Count + pageSize - 1) / pageSize;
             var nameWidth = MeasureNameWidth(items);

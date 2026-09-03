@@ -87,10 +87,11 @@ off is a direct instruction about that skill. Only paths the picker actually dis
 that set, so interactive mode can never remove something it did not show.
 
 **The picker pages, and that is the point.** A solution can reference many packages that ship
-skills. `SkillPicker` renders a fixed-height frame of at most ten and redraws it in place, so the
-list can never scroll off the top unread — agreeing to skills you did not see is the failure mode
-worth designing against. It never reads a `SKILL.md`; it shows the folder name, package, and
-version already on `BundledSkill`.
+skills. `SkillPicker` renders a frame that fits the window and redraws it in place, so the list
+can never scroll off the top unread — agreeing to skills you did not see is the failure mode worth
+designing against. Page size follows the terminal height rather than a constant: a fixed ceiling
+paged lists that already fitted, which is a keypress asking nothing. It never reads a `SKILL.md`;
+it shows the folder name, package, and version already on `BundledSkill`.
 
 **The frame is measured from its contents, not the window.** `SkillPicker.Layout` sizes the page
 to the number of skills and the width to the longest line any frame could produce, and `Render`

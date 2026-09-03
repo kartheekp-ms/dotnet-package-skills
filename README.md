@@ -109,8 +109,9 @@ page drops "change page", a single skill drops the rest. These all work:
 | `enter` | Confirm the selection |
 | `esc` / `q` / `ctrl+c` | Cancel, changing nothing |
 
-The frame is sized to what it holds. At most ten skills a page, because a list long enough to
-scroll off the top is a list nobody reads before agreeing to it — but a repository with one skill
+The frame is sized to what it holds. A page is as tall as your terminal allows, so a list that
+fits shows all at once and never mentions pages at all — and when it does page, a list long enough
+to scroll off the top is a list nobody reads before agreeing to it. A repository with one skill
 gets a four-line prompt, not a screenful of blank rows, and a last page with two skills ends after
 the second. Keys that would do nothing are left out: no page counter when there is only one page,
 no movement or select-all keys when there is only one skill.

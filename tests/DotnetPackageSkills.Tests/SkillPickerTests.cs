@@ -296,6 +296,45 @@ public class SkillPickerTests
     }
 
     [Fact]
+    public void A_tall_window_shows_more_skills_per_page()
+    {
+        var terminal = new FakeTerminal(windowHeight: 40).Press(ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(24), Title);
+
+        // 40 rows less seven of chrome and one held back leaves 32, so 24 skills fit at once.
+        var frame = terminal.Frames[0];
+        Assert.Contains("skill-24", frame);
+        Assert.DoesNotContain("page 1 of", frame);
+    }
+
+    [Fact]
+    public void A_window_taller_than_the_list_does_not_page_at_all()
+    {
+        var terminal = new FakeTerminal(windowHeight: 40).Press(ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(24), Title);
+
+        // Nothing to page to, so the paging key is dropped along with the counter.
+        Assert.DoesNotContain("change page", terminal.Frames[0]);
+    }
+
+    [Fact]
+    public void The_page_is_the_window_height_not_a_fixed_ceiling()
+    {
+        // Twenty-eight rows leaves room for twenty skills. A hardcoded ten would have paged
+        // this three times over and hidden two thirds of the list behind a keypress.
+        var terminal = new FakeTerminal(windowHeight: 28).Press(ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(60), Title);
+
+        var frame = terminal.Frames[0];
+        Assert.Contains("skill-20", frame);
+        Assert.DoesNotContain("skill-21", frame);
+        Assert.Contains("page 1 of 3", frame);
+    }
+
+    [Fact]
     public void A_short_window_shrinks_the_page_rather_than_overflowing_it()
     {
         var terminal = new FakeTerminal(windowHeight: 12).Press(ConsoleKey.Enter);

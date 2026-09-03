@@ -9,8 +9,12 @@ namespace DotnetPackageSkills.Tests;
 /// The buffer is modelled rather than the output concatenated, because the picker redraws in
 /// place: appending every write would show frames layered on top of each other instead of the
 /// one page a user actually sees.
+///
+/// The default height is the one that yields a ten-row page (seven rows of chrome and one held
+/// back), so the page size a test gets is visible in the numbers rather than a constant it has
+/// to know about.
 /// </remarks>
-internal sealed class FakeTerminal(int windowHeight = 24, int windowWidth = 100) : ITerminal
+internal sealed class FakeTerminal(int windowHeight = 18, int windowWidth = 100) : ITerminal
 {
     private readonly List<string> _screen = [];
     private readonly List<string> _frames = [];
