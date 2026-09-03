@@ -20,7 +20,7 @@ public sealed class OutputWriter(TextWriter output)
     /// False for <c>list</c>, which discovers without writing, so the report says "Found"
     /// rather than claiming files were placed.
     /// </param>
-    public void WriteSyncReport(SyncResult result, bool copied)
+    public void WriteInstallReport(InstallResult result, bool copied)
     {
         WriteContext(result);
 
@@ -83,7 +83,7 @@ public sealed class OutputWriter(TextWriter output)
         }
     }
 
-    private void WriteContext(SyncResult result)
+    private void WriteContext(InstallResult result)
     {
         output.WriteLine($"Target:      {result.Target ?? "(packages named on the command line)"}");
         output.WriteLine($"NuGet cache: {result.GlobalPackagesFolder}");
@@ -95,7 +95,7 @@ public sealed class OutputWriter(TextWriter output)
         output.WriteLine();
     }
 
-    private void WriteSkipped(SyncResult result)
+    private void WriteSkipped(InstallResult result)
     {
         if (result.Skipped.Count == 0)
         {
@@ -113,7 +113,7 @@ public sealed class OutputWriter(TextWriter output)
         }
     }
 
-    private void WriteNotOnDisk(SyncResult result)
+    private void WriteNotOnDisk(InstallResult result)
     {
         if (result.NotOnDisk.Count == 0)
         {

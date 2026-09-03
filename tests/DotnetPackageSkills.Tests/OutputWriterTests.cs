@@ -6,12 +6,12 @@ namespace DotnetPackageSkills.Tests;
 public class OutputWriterTests
 {
     [Fact]
-    public void Sync_report_warns_about_skipped_collisions()
+    public void Install_report_warns_about_skipped_collisions()
     {
         using var output = new StringWriter();
         var result = ResultWithCollision();
 
-        new OutputWriter(output).WriteSyncReport(result, copied: true);
+        new OutputWriter(output).WriteInstallReport(result, copied: true);
 
         var report = output.ToString();
         Assert.Contains("Warning: skipped 1 colliding skill:", report);
@@ -38,7 +38,7 @@ public class OutputWriterTests
         using var output = new StringWriter();
         var result = ResultWithCollision() with { Skills = [], SkillsDiscovered = 2 };
 
-        new OutputWriter(output).WriteSyncReport(result, copied: true);
+        new OutputWriter(output).WriteInstallReport(result, copied: true);
 
         var report = output.ToString();
         Assert.Contains("Copied no skills.", report);
@@ -51,7 +51,7 @@ public class OutputWriterTests
         using var output = new StringWriter();
         var result = ResultWithCollision() with { Skills = [], Skipped = [], SkillsDiscovered = 0 };
 
-        new OutputWriter(output).WriteSyncReport(result, copied: true);
+        new OutputWriter(output).WriteInstallReport(result, copied: true);
 
         Assert.Contains("None of the scanned packages ship a skills/ folder", output.ToString());
     }
@@ -63,7 +63,7 @@ public class OutputWriterTests
 
         // list always runs as a dry run internally, but it is a query: it was never going
         // to copy anything, so "Would copy" would misdescribe it.
-        new OutputWriter(output).WriteSyncReport(ResultWithCollision() with { DryRun = true }, copied: false);
+        new OutputWriter(output).WriteInstallReport(ResultWithCollision() with { DryRun = true }, copied: false);
 
         var report = output.ToString();
         Assert.Contains("Found 1 skill:", report);
@@ -71,11 +71,11 @@ public class OutputWriterTests
     }
 
     [Fact]
-    public void A_sync_dry_run_still_says_what_it_would_copy()
+    public void An_install_dry_run_still_says_what_it_would_copy()
     {
         using var output = new StringWriter();
 
-        new OutputWriter(output).WriteSyncReport(ResultWithCollision() with { DryRun = true }, copied: true);
+        new OutputWriter(output).WriteInstallReport(ResultWithCollision() with { DryRun = true }, copied: true);
 
         Assert.Contains("Would copy 1 skill:", output.ToString());
     }
@@ -92,7 +92,7 @@ public class OutputWriterTests
             NotOnDisk = ["Ghost.Package 9.9.9"],
         };
 
-        new OutputWriter(output).WriteSyncReport(result, copied: true);
+        new OutputWriter(output).WriteInstallReport(result, copied: true);
 
         var report = output.ToString();
         Assert.Contains("No bundled skills found.", report);
@@ -101,7 +101,7 @@ public class OutputWriterTests
         Assert.Contains("not extracted in the NuGet cache", report);
     }
 
-    private static SyncResult ResultWithCollision() => new()
+    private static InstallResult ResultWithCollision() => new()
     {
         Target = @"C:\repo\App.sln",
         GlobalPackagesFolder = @"C:\packages",

@@ -2,7 +2,7 @@ using DotnetPackageSkills.NuGet;
 
 namespace DotnetPackageSkills.Skills;
 
-/// <summary>Outcome of an install or sync.</summary>
+/// <summary>Outcome of an install.</summary>
 public sealed record InstallOutcome(
     IReadOnlyList<BundledSkill> Installed,
     IReadOnlyList<TrackedSkill> Removed,
@@ -264,7 +264,7 @@ public sealed class SkillInstaller
             File.Copy(file, target, overwrite: true);
 
             // Files in the global packages folder are marked read-only by restore. Copying
-            // carries that attribute over, which would make the next sync fail to overwrite.
+            // carries that attribute over, which would make the next install fail to overwrite.
             ClearReadOnly(target);
         }
     }

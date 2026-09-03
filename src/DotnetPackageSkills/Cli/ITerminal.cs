@@ -53,7 +53,7 @@ internal sealed class SystemTerminal : ITerminal
     public bool CursorVisible
     {
         // Hiding the cursor is a courtesy, not a requirement, and the setter throws on hosts
-        // that do not support it. Failing the whole sync over a cosmetic detail would be absurd.
+        // that do not support it. Failing the whole install over a cosmetic detail would be absurd.
         set => Ignoring(() => Console.CursorVisible = value);
     }
 

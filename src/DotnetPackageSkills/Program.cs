@@ -78,20 +78,20 @@ namespace DotnetPackageSkills.Cli
                 HelpName = "ID[@VERSION]",
             };
 
-            var sync = new Command("sync", "Copy skills bundled in NuGet packages into the repository.")
+            var install = new Command("install", "Copy skills bundled in NuGet packages into the repository.")
             {
                 target, package, destination, noRestore, globalPackages, dryRun, json, interactive,
             };
-            sync.Validators.Add(RejectTargetWithPackage);
-            sync.Validators.Add(RejectInteractiveWithJson);
-            sync.SetAction(parseResult => Run(() =>
+            install.Validators.Add(RejectTargetWithPackage);
+            install.Validators.Add(RejectInteractiveWithJson);
+            install.SetAction(parseResult => Run(() =>
             {
                 var request = BuildRequest(parseResult);
-                var service = new SkillSyncService(new ProcessRunner());
+                var service = new SkillInstallService(new ProcessRunner());
 
                 var result = parseResult.GetValue(interactive)
-                    ? SyncInteractively(service, request)
-                    : service.Sync(request);
+                    ? InstallInteractively(service, request)
+                    : service.Install(request);
 
                 if (result is null)
                 {
@@ -99,7 +99,7 @@ namespace DotnetPackageSkills.Cli
                     return;
                 }
 
-                Report(parseResult, writer => writer.WriteSyncReport(result, copied: true), result);
+                Report(parseResult, writer => writer.WriteInstallReport(result, copied: true), result);
             }));
 
             var list = new Command("list", "Show which packages ship skills, without copying anything.")
@@ -110,8 +110,8 @@ namespace DotnetPackageSkills.Cli
             list.SetAction(parseResult => Run(() =>
             {
                 var request = BuildRequest(parseResult) with { DryRun = true };
-                var result = new SkillSyncService(new ProcessRunner()).Discover(request);
-                Report(parseResult, writer => writer.WriteSyncReport(result, copied: false), result);
+                var result = new SkillInstallService(new ProcessRunner()).Discover(request);
+                Report(parseResult, writer => writer.WriteInstallReport(result, copied: false), result);
             }));
 
             var uninstall = new Command("uninstall", "Remove skills this tool previously copied in.")
@@ -125,7 +125,7 @@ namespace DotnetPackageSkills.Cli
                 var isDryRun = parseResult.GetValue(dryRun);
                 var (id, version) = ParseUninstallFilter(parseResult.GetValue(uninstallPackage));
 
-                var removed = new SkillSyncService(new ProcessRunner())
+                var removed = new SkillInstallService(new ProcessRunner())
                     .Uninstall(destinationValue, workingDirectory, id, version, isDryRun);
 
                 var root = Path.GetFullPath(destinationValue, workingDirectory);
@@ -145,10 +145,10 @@ namespace DotnetPackageSkills.Cli
                 your repository and which no coding agent scans. This tool bridges that gap.
                 """)
             {
-                sync, list, uninstall,
+                install, list, uninstall,
             };
 
-            SyncRequest BuildRequest(ParseResult parseResult) => new()
+            InstallRequest BuildRequest(ParseResult parseResult) => new()
             {
                 Target = parseResult.GetValue(target),
                 Packages = [.. (parseResult.GetValue(package) ?? []).Select(PackageCoordinate.Parse)],
@@ -199,18 +199,18 @@ namespace DotnetPackageSkills.Cli
         /// Discovers skills, lets the user pick from them a page at a time, then installs the
         /// selection. Returns null when the user cancelled.
         /// </summary>
-        private static SyncResult? SyncInteractively(SkillSyncService service, SyncRequest request)
+        private static InstallResult? InstallInteractively(SkillInstallService service, InstallRequest request)
         {
             var discovered = service.Discover(request);
 
-            // Nothing to choose between, so there is no prompt to show. Sync anyway, because
+            // Nothing to choose between, so there is no prompt to show. Install anyway, because
             // pruning still has work to do when a package stopped shipping a skill.
             if (discovered.Skills.Count == 0)
             {
-                return service.Sync(request, discovered, choice: null);
+                return service.Install(request, discovered, choice: null);
             }
 
-            var installed = SkillSyncService.InstalledSkillNames(discovered.Destination);
+            var installed = SkillInstallService.InstalledSkillNames(discovered.Destination);
 
             var items = discovered.Skills
                 .Select(skill => new SkillPickerItem(skill, installed.Contains(skill.RelativePath)))
@@ -218,10 +218,10 @@ namespace DotnetPackageSkills.Cli
 
             var choice = new SkillPicker(new SystemTerminal()).Choose(items, PickerTitle(discovered));
 
-            return choice is null ? null : service.Sync(request, discovered, choice);
+            return choice is null ? null : service.Install(request, discovered, choice);
         }
 
-        private static string PickerTitle(SyncResult discovered) =>
+        private static string PickerTitle(InstallResult discovered) =>
             discovered.Target is null
                 ? "Skills from the packages you named"
                 : $"Skills for {Path.GetFileName(discovered.Target)}";

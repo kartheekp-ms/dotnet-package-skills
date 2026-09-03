@@ -33,7 +33,7 @@ dotnet tool install --global dotnet-package-skills
 From your repository root:
 
 ```bash
-dotnet package-skills sync
+dotnet package-skills install
 ```
 
 That is the whole workflow. It finds your solution or project, lists its packages, locates each
@@ -46,7 +46,7 @@ and removes what is not.
 
 | Command | What it does |
 | --- | --- |
-| `sync` | Copy bundled skills into the destination. Removes stale skills no longer provided by direct dependencies, and any you turn off with `--interactive`. |
+| `install` | Copy bundled skills into the destination. Removes stale skills no longer provided by direct dependencies, and any you turn off with `--interactive`. |
 | `list` | Show which packages ship skills, without copying anything. |
 | `uninstall` | Remove skills this tool copied in. |
 
@@ -55,9 +55,9 @@ and removes what is not.
 Three ways to say which packages to take skills from:
 
 ```bash
-dotnet package-skills sync                              # auto-detect solution or project
-dotnet package-skills sync --target src/MyApp.slnx      # a specific solution or project
-dotnet package-skills sync --package Mockly@1.10.0      # exact packages, no project needed
+dotnet package-skills install                              # auto-detect solution or project
+dotnet package-skills install --target src/MyApp.slnx      # a specific solution or project
+dotnet package-skills install --package Mockly@1.10.0      # exact packages, no project needed
 ```
 
 `--package` is repeatable and needs an **exact version** — `Mockly@1.*` and `Mockly@[1.0,2.0)` are
@@ -72,11 +72,11 @@ else alone. Only a target describes a complete set of packages, so only a target
 
 ### Choosing which skills to install
 
-By default `sync` copies everything it finds. Add `--interactive` to choose:
+By default `install` copies everything it finds. Add `--interactive` to choose:
 
 ```bash
-dotnet package-skills sync --interactive                          # everything the project references
-dotnet package-skills sync --package Mockly@1.10.0 --interactive  # just one package's skills
+dotnet package-skills install --interactive                          # everything the project references
+dotnet package-skills install --package Mockly@1.10.0 --interactive  # just one package's skills
 ```
 
 It composes with `--target` and `--package`, so you can narrow to a single package first and then
@@ -118,7 +118,7 @@ no movement or select-all keys when there is only one skill.
 Skills you already have start selected, so pressing enter straight away changes
 nothing and a new skill is always an explicit opt-in.
 
-**Turning off a skill you already have deletes it** — including under `--package`, where sync is
+**Turning off a skill you already have deletes it** — including under `--package`, where install is
 otherwise additive. Pruning is inferred from a complete package set; deselecting is you saying so.
 
 `--interactive` needs a terminal and cannot be combined with `--json`. Pair it with `--dry-run` to
@@ -128,14 +128,14 @@ see what a selection would change before committing to it.
 
 | Option | Applies to | Description |
 | --- | --- | --- |
-| `-t, --target <PATH>` | sync, list | Solution or project to inspect. Defaults to searching the current directory. |
-| `-p, --package <ID@VERSION>` | sync, list | Take skills from an exact package instead of a project. Repeatable. No floating versions. |
+| `-t, --target <PATH>` | install, list | Solution or project to inspect. Defaults to searching the current directory. |
+| `-p, --package <ID@VERSION>` | install, list | Take skills from an exact package instead of a project. Repeatable. No floating versions. |
 | `-d, --destination <PATH>` | all | Where skills are copied. Default `.agents/skills`. |
-| `--no-restore` | sync, list | Fail instead of restoring when the target has not been restored. |
-| `--global-packages <PATH>` | sync, list | Override the NuGet global packages folder. |
-| `-i, --interactive` | sync | Choose which skills to install, a page at a time. Combines with `--target` or `--package`. Not with `--json`. |
+| `--no-restore` | install, list | Fail instead of restoring when the target has not been restored. |
+| `--global-packages <PATH>` | install, list | Override the NuGet global packages folder. |
+| `-i, --interactive` | install | Choose which skills to install, a page at a time. Combines with `--target` or `--package`. Not with `--json`. |
 | `-p, --package <ID[@VERSION]>` | uninstall | Remove only skills from this package — every version, or one. |
-| `--dry-run` | sync, uninstall | Report what would change without writing anything. |
+| `--dry-run` | install, uninstall | Report what would change without writing anything. |
 | `--json` | all | Machine-readable output, for scripts and agents. |
 
 ### Targeting another agent's folder
@@ -143,8 +143,8 @@ see what a selection would change before committing to it.
 `.agents/skills` is the vendor-neutral default. Point `--destination` anywhere else:
 
 ```bash
-dotnet package-skills sync --destination .claude/skills
-dotnet package-skills sync --destination .codex/skills
+dotnet package-skills install --destination .claude/skills
+dotnet package-skills install --destination .codex/skills
 ```
 
 ## What you get

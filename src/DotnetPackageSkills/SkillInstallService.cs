@@ -4,8 +4,8 @@ using DotnetPackageSkills.Skills;
 
 namespace DotnetPackageSkills;
 
-/// <summary>Inputs for an install, sync, or list.</summary>
-public sealed record SyncRequest
+/// <summary>Inputs for an install or a list.</summary>
+public sealed record InstallRequest
 {
     /// <summary>Solution or project to inspect. Ignored when <see cref="Packages"/> is set.</summary>
     public string? Target { get; init; }
@@ -20,8 +20,8 @@ public sealed record SyncRequest
     public bool DryRun { get; init; }
 }
 
-/// <summary>What an install, sync, or list produced.</summary>
-public sealed record SyncResult
+/// <summary>What an install or a list produced.</summary>
+public sealed record InstallResult
 {
     /// <summary>The solution or project inspected, or null when packages were named explicitly.</summary>
     public string? Target { get; init; }
@@ -60,21 +60,21 @@ public sealed record SkillChoice(
     IReadOnlyList<string> Deselected);
 
 /// <summary>Ties package listing, skill discovery, and installation together.</summary>
-public sealed class SkillSyncService(DotnetCli dotnet, SkillInstaller installer)
+public sealed class SkillInstallService(DotnetCli dotnet, SkillInstaller installer)
 {
-    public SkillSyncService(IProcessRunner runner) : this(new DotnetCli(runner), new SkillInstaller())
+    public SkillInstallService(IProcessRunner runner) : this(new DotnetCli(runner), new SkillInstaller())
     {
     }
 
     /// <summary>Discovers bundled skills without writing anything.</summary>
-    public SyncResult Discover(SyncRequest request)
+    public InstallResult Discover(InstallRequest request)
     {
         return request.Packages.Count > 0
             ? DiscoverFromCoordinates(request)
             : DiscoverFromTarget(request);
     }
 
-    private SyncResult DiscoverFromTarget(SyncRequest request)
+    private InstallResult DiscoverFromTarget(InstallRequest request)
     {
         var target = TargetLocator.Resolve(request.Target, request.WorkingDirectory);
 
@@ -92,7 +92,7 @@ public sealed class SkillSyncService(DotnetCli dotnet, SkillInstaller installer)
         return Build(request, target, globalPackages, packages.Count, skills, notOnDisk, skipped);
     }
 
-    private SyncResult DiscoverFromCoordinates(SyncRequest request)
+    private InstallResult DiscoverFromCoordinates(InstallRequest request)
     {
         var globalPackages = LocateGlobalPackages(request, request.WorkingDirectory);
 
@@ -103,7 +103,7 @@ public sealed class SkillSyncService(DotnetCli dotnet, SkillInstaller installer)
         return Build(request, target: null, globalPackages, request.Packages.Count, skills, notOnDisk, skipped);
     }
 
-    private string LocateGlobalPackages(SyncRequest request, string? preferredDirectory) =>
+    private string LocateGlobalPackages(InstallRequest request, string? preferredDirectory) =>
         new GlobalPackagesLocator(dotnet).Locate(
             request.GlobalPackagesOverride,
             preferredDirectory ?? request.WorkingDirectory);
@@ -146,8 +146,8 @@ public sealed class SkillSyncService(DotnetCli dotnet, SkillInstaller installer)
         return (skills, notOnDisk, skipped);
     }
 
-    private static SyncResult Build(
-        SyncRequest request,
+    private static InstallResult Build(
+        InstallRequest request,
         string? target,
         string globalPackages,
         int packagesScanned,
@@ -168,13 +168,13 @@ public sealed class SkillSyncService(DotnetCli dotnet, SkillInstaller installer)
         };
 
     /// <summary>Discovers bundled skills and copies them into the destination.</summary>
-    public SyncResult Sync(SyncRequest request) => Sync(request, Discover(request), choice: null);
+    public InstallResult Install(InstallRequest request) => Install(request, Discover(request), choice: null);
 
     /// <summary>
     /// Copies a caller-chosen subset of already-discovered skills, which is what the interactive
     /// picker produces. Passing a null <paramref name="choice"/> installs everything discovered.
     /// </summary>
-    public SyncResult Sync(SyncRequest request, SyncResult discovered, SkillChoice? choice)
+    public InstallResult Install(InstallRequest request, InstallResult discovered, SkillChoice? choice)
     {
         // Only a target describes a complete set of packages, so only a target licenses
         // pruning. Naming packages explicitly is additive — it says nothing about the

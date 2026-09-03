@@ -201,7 +201,7 @@ public class SkillInstallerTests
         var destination = temp.Combine("dest");
 
         // Pruning is driven by the manifest, so a hand-authored skill sitting alongside
-        // package-provided ones has to survive every sync.
+        // package-provided ones has to survive every install.
         Directory.CreateDirectory(destination);
         var handAuthored = Path.Combine(destination, "our-own-skill");
         Directory.CreateDirectory(handAuthored);
@@ -403,7 +403,7 @@ public class SkillInstallerTests
             var copied = Path.Combine(destination, "mockly", "SKILL.md");
             Assert.False(File.GetAttributes(copied).HasFlag(FileAttributes.ReadOnly));
 
-            // The real point: a second sync must be able to overwrite the copy.
+            // The real point: a second install must be able to overwrite the copy.
             _installer.Install(destination, [skill], dryRun: false);
         }
         finally

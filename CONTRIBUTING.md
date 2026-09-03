@@ -34,7 +34,7 @@ dotnet tool install --global --add-source ./artifacts dotnet-package-skills
 ```
 src/DotnetPackageSkills/
 ├── Program.cs              CLI surface: commands, options, exit codes
-├── SkillSyncService.cs     Orchestration — the only place the steps are sequenced
+├── SkillInstallService.cs     Orchestration — the only place the steps are sequenced
 ├── Cli/OutputWriter.cs     Human-readable and JSON rendering
 ├── Cli/SkillPicker.cs      The --interactive picker, paged so one screen is one page
 ├── Cli/ITerminal.cs        Console access behind an interface, so the picker can be tested
@@ -61,7 +61,7 @@ groups copied skill folder names under their package id and version; pruning and
 only on those names. Users keep their own hand-written skills in the same folder, and deleting one
 of those would be unforgivable.
 
-**No tracked skills means no manifest and no folder.** When the last entry goes, `sync` and
+**No tracked skills means no manifest and no folder.** When the last entry goes, `install` and
 `uninstall` both delete `.dotnet-package-skills.json` and drop the destination folder if it is
 empty, so a repository where nothing ships a skill never grows a stray `.agents/skills/`. The
 folder only goes when it is genuinely empty — hand-written skills keep it alive.
@@ -78,7 +78,7 @@ problem to a file-copying tool.
 missing from it is genuinely no longer referenced. `--package` names a few packages and says
 nothing about the rest, so it copies additively — see the `prune` parameter on
 `SkillInstaller.Install`. Getting this backwards would delete a user's other skills the first time
-they synced a single package.
+they installed a single package.
 
 **A deselection removes; an omission does not.** `--interactive` hands `SkillInstaller.Install` a
 `deselected` set of destination paths, and those go even when `prune` is false. That is not a hole
@@ -156,7 +156,7 @@ someone stuck, it needs more words.
 ## Tests
 
 Tests run offline and never invoke `dotnet`. Anything that needs the CLI goes through
-`IProcessRunner`, which `SkillSyncServiceTests` fakes — see `FakeDotnet` there for the pattern.
+`IProcessRunner`, which `SkillInstallServiceTests` fakes — see `FakeDotnet` there for the pattern.
 Use `TempDirectory` for anything touching the file system; it cleans up after itself.
 
 The interactive picker goes through `ITerminal`, which `FakeTerminal` drives from a scripted key
@@ -168,7 +168,7 @@ Name tests as a sentence describing the behaviour, not the method under test:
 
 ```csharp
 [Fact]
-public void Sync_skips_a_later_skill_when_destination_names_collide()
+public void Install_skips_a_later_skill_when_destination_names_collide()
 ```
 
 New behaviour needs a test. Bug fixes need a test that fails without the fix — the `.slnx`
@@ -178,11 +178,6 @@ preference bug shipped with one, and that is why it stayed fixed.
 
 `TreatWarningsAsErrors` is on; builds must be warning-clean. Beyond that, match the surrounding
 code. Comments explain *why*, not what — if a comment restates the code, delete it.
-
-One naming note so it doesn't look like drift: the CLI verb is `sync`, but the types that write
-files keep `Install` names — `SkillInstaller.Install`, `InstallManifest`. The verb describes what
-the user asked for; the types describe what they do to the file system. Both are right at their own
-level.
 
 ## Compatibility
 
@@ -202,5 +197,5 @@ level.
 - One change per PR.
 - `dotnet build` and `dotnet test` pass.
 - README updated if you changed the CLI surface.
-- Say what you tested it against. "Ran `sync` on a solution with 40 packages, two of which ship
+- Say what you tested it against. "Ran `install` on a solution with 40 packages, two of which ship
   skills" is worth more than a description of the diff.
