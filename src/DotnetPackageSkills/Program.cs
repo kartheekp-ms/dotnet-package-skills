@@ -78,6 +78,16 @@ namespace DotnetPackageSkills.Cli
                 HelpName = "ID[@VERSION]",
             };
 
+            // Its own option rather than the one install uses, because "copy skills into" is
+            // nonsense on a command that only deletes. It still has to exist: skills installed
+            // to somewhere other than the default are unreachable without it.
+            var uninstallDestination = new Option<string>("--destination", "-d")
+            {
+                Description = $"Folder to remove skills from. Default: {DefaultDestination}",
+                HelpName = "PATH",
+                DefaultValueFactory = _ => DefaultDestination,
+            };
+
             var install = new Command("install", "Copy skills bundled in NuGet packages into the repository.")
             {
                 target, package, destination, noRestore, globalPackages, dryRun, json, interactive,
@@ -116,12 +126,12 @@ namespace DotnetPackageSkills.Cli
 
             var uninstall = new Command("uninstall", "Remove skills this tool previously copied in.")
             {
-                destination, uninstallPackage, dryRun, json,
+                uninstallDestination, uninstallPackage, dryRun, json,
             };
             uninstall.SetAction(parseResult => Run(() =>
             {
                 var workingDirectory = Directory.GetCurrentDirectory();
-                var destinationValue = parseResult.GetValue(destination) ?? DefaultDestination;
+                var destinationValue = parseResult.GetValue(uninstallDestination) ?? DefaultDestination;
                 var isDryRun = parseResult.GetValue(dryRun);
                 var (id, version) = ParseUninstallFilter(parseResult.GetValue(uninstallPackage));
 

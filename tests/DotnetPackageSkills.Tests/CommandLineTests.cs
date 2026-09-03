@@ -5,6 +5,38 @@ namespace DotnetPackageSkills.Tests;
 public class CommandLineTests
 {
     [Fact]
+    public void Uninstall_says_it_removes_from_the_destination_rather_than_copying_into_it()
+    {
+        var uninstall = CommandLineBuilder.Build()
+            .Subcommands.Single(command => command.Name == "uninstall");
+
+        var destination = uninstall.Options.Single(option => option.Name == "--destination");
+
+        // The option is shared-looking but not shared: install's wording is about copying in,
+        // which reads as nonsense on a command that only deletes.
+        Assert.Contains("remove skills from", destination.Description, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("copy", destination.Description, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Uninstall_still_accepts_a_destination()
+    {
+        // Skills installed anywhere but the default are unreachable without it.
+        Assert.Empty(CommandLineBuilder.Build().Parse(["uninstall", "-d", ".claude/skills"]).Errors);
+    }
+
+    [Fact]
+    public void Install_still_says_it_copies_into_the_destination()
+    {
+        var install = CommandLineBuilder.Build()
+            .Subcommands.Single(command => command.Name == "install");
+
+        var destination = install.Options.Single(option => option.Name == "--destination");
+
+        Assert.Contains("copy skills into", destination.Description, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void The_removed_sync_verb_is_rejected()
     {
         // Renamed to install, which pairs with uninstall. A clean break at 0.1.0 rather than

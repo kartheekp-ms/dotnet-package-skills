@@ -131,7 +131,8 @@ see what a selection would change before committing to it.
 | --- | --- | --- |
 | `-t, --target <PATH>` | install, list | Solution or project to inspect. Defaults to searching the current directory. |
 | `-p, --package <ID@VERSION>` | install, list | Take skills from an exact package instead of a project. Repeatable. No floating versions. |
-| `-d, --destination <PATH>` | all | Where skills are copied. Default `.agents/skills`. |
+| `-d, --destination <PATH>` | install, list | Where skills are copied. Default `.agents/skills`. |
+| `-d, --destination <PATH>` | uninstall | Where to remove them from. Must match the one you installed to. |
 | `--no-restore` | install, list | Fail instead of restoring when the target has not been restored. |
 | `--global-packages <PATH>` | install, list | Override the NuGet global packages folder. |
 | `-i, --interactive` | install | Choose which skills to install, a page at a time. Combines with `--target` or `--package`. Not with `--json`. |
@@ -146,6 +147,13 @@ see what a selection would change before committing to it.
 ```bash
 dotnet package-skills install --destination .claude/skills
 dotnet package-skills install --destination .codex/skills
+```
+
+`uninstall` takes the same option, and needs it: it only looks where you point it, so removing
+what you put in `.claude/skills` means saying so again.
+
+```bash
+dotnet package-skills uninstall --destination .claude/skills
 ```
 
 ## What you get
