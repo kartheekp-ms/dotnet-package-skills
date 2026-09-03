@@ -27,35 +27,56 @@ internal sealed class SkillPicker(ITerminal terminal)
     private const string InstalledLabel = "installed";
     private const string NewLabel = "new";
 
-    private const string ActionHelp = "a all   c none   enter confirm   esc cancel";
-
     /// <summary>
-    /// Builds the movement legend from the keys that actually do something here. Offering
-    /// "left/right page" on a single page, or "up/down move" on a single skill, teaches the
-    /// reader a control that does nothing when they try it.
+    /// Legend for browsing: what you do while looking around, then the key that does it.
     /// </summary>
     /// <remarks>
+    /// Action first, key in brackets. "space toggle" reads as jargon to anyone who has not
+    /// already been told what it means, whereas "toggle selection (space)" answers the
+    /// question the reader is actually asking, which is what they can do here.
+    ///
+    /// Built from the keys that do something: offering "change page" on a single page, or
+    /// "move" on a single skill, teaches a control that does nothing when they try it.
+    ///
     /// Deliberately ASCII. Windows consoles default to an OEM code page that silently drops
     /// arrows and box-drawing glyphs, so a prettier legend renders as gaps on exactly the
     /// terminal most users are on.
     /// </remarks>
-    private static string NavigationHelp(int itemCount, int pages)
+    private static string BrowseHelp(int itemCount, int pages)
     {
-        var keys = new List<string>(3);
+        var entries = new List<string>(3);
 
         if (itemCount > 1)
         {
-            keys.Add("up/down move");
+            entries.Add("move (up/down)");
         }
 
         if (pages > 1)
         {
-            keys.Add("left/right page");
+            entries.Add("change page (left/right)");
         }
 
-        keys.Add("space toggle");
+        entries.Add("toggle selection (space)");
 
-        return string.Join("   ", keys);
+        return string.Join("   ", entries);
+    }
+
+    /// <summary>Legend for the rest: acting on everything at once, and leaving.</summary>
+    private static string CommitHelp(int itemCount)
+    {
+        var entries = new List<string>(4);
+
+        // With one skill, "select all" and "clear all" are just a slower way to press space.
+        if (itemCount > 1)
+        {
+            entries.Add("select all (a)");
+            entries.Add("clear all (c)");
+        }
+
+        entries.Add("confirm (enter)");
+        entries.Add("cancel (esc)");
+
+        return string.Join("   ", entries);
     }
 
     /// <summary>
@@ -218,8 +239,8 @@ internal sealed class SkillPicker(ITerminal terminal)
             layout.Pages > 1 ? Spread(title, $"page {page + 1} of {layout.Pages}", width) : title,
             width);
         WriteRow(string.Empty, width);
-        WriteRow($"  {NavigationHelp(items.Count, layout.Pages)}", width);
-        WriteRow($"  {ActionHelp}", width);
+        WriteRow($"  {BrowseHelp(items.Count, layout.Pages)}", width);
+        WriteRow($"  {CommitHelp(items.Count)}", width);
         WriteRow(string.Empty, width);
 
         for (var row = 0; row < rows; row++)
@@ -315,8 +336,8 @@ internal sealed class SkillPicker(ITerminal terminal)
             var content = new List<int>
             {
                 pages > 1 ? title.Length + 2 + $"page {pages} of {pages}".Length : title.Length,
-                NavigationHelp(items.Count, pages).Length + 2,
-                ActionHelp.Length + 2,
+                BrowseHelp(items.Count, pages).Length + 2,
+                CommitHelp(items.Count).Length + 2,
                 WidestSummary(items.Count) + 2,
             };
 

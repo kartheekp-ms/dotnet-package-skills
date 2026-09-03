@@ -477,8 +477,8 @@ public class SkillPickerTests
         Assert.Contains(Title, frame);
         Assert.DoesNotContain("page 1 of 1", frame);
         // Nothing to page to, so offering the key would teach a control that does nothing.
-        Assert.DoesNotContain("left/right page", frame);
-        Assert.Contains("up/down move", frame);
+        Assert.DoesNotContain("change page", frame);
+        Assert.Contains("move (up/down)", frame);
     }
 
     [Fact]
@@ -489,10 +489,33 @@ public class SkillPickerTests
         new SkillPicker(terminal).Choose(Items(1), Title);
 
         var frame = terminal.Frames[0];
-        Assert.DoesNotContain("up/down move", frame);
-        Assert.DoesNotContain("left/right page", frame);
-        Assert.Contains("space toggle", frame);
-        Assert.Contains("enter confirm", frame);
+        Assert.DoesNotContain("move (up/down)", frame);
+        Assert.DoesNotContain("change page", frame);
+        // With one skill, select-all and clear-all are a slower way to press space.
+        Assert.DoesNotContain("select all", frame);
+        Assert.DoesNotContain("clear all", frame);
+        Assert.Contains("toggle selection (space)", frame);
+        Assert.Contains("confirm (enter)", frame);
+        Assert.Contains("cancel (esc)", frame);
+    }
+
+    [Fact]
+    public void The_legend_names_the_action_before_the_key()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(24), Title);
+
+        // "space toggle" only reads to someone already told what it means. The reader is
+        // asking what they can do here, so the answer comes first and the key follows.
+        var frame = terminal.Frames[0];
+        Assert.Contains("move (up/down)", frame);
+        Assert.Contains("change page (left/right)", frame);
+        Assert.Contains("toggle selection (space)", frame);
+        Assert.Contains("select all (a)", frame);
+        Assert.Contains("clear all (c)", frame);
+        Assert.Contains("confirm (enter)", frame);
+        Assert.Contains("cancel (esc)", frame);
     }
 
     [Fact]
@@ -504,7 +527,7 @@ public class SkillPickerTests
 
         var frame = terminal.Frames[0];
         Assert.Contains("page 1 of 3", frame);
-        Assert.Contains("left/right page", frame);
+        Assert.Contains("change page (left/right)", frame);
     }
 
     [Fact]

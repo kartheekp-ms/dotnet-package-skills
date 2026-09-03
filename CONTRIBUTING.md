@@ -103,7 +103,12 @@ Two things follow from redrawing in place, and both are easy to break. Rows are 
 measured width, and rows below a shorter frame are blanked, because overwriting is the only way
 to erase without ANSI. And the widest possible summary is measured rather than the current one,
 since the removal clause appears and disappears as you select. Chrome that would do nothing is
-dropped: no counter on a single page, no movement keys for a single skill.
+dropped: no counter on a single page, no movement or select-all keys for a single skill.
+
+**The legend names the action, then the key.** "space toggle" only reads to someone who has
+already been told what it means; the reader is asking what they can do here, so "toggle selection
+(space)" answers that and the key follows. This came out of watching a demo land badly, which is
+worth more than any amount of arguing about it beforehand.
 
 **The picker owns the terminal, so it has to hand it back.** `Choose` hides the cursor and takes
 Ctrl+C as input, and restores both in a `finally`. Ctrl+C is why: left to the runtime it ends the

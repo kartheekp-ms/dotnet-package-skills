@@ -85,8 +85,8 @@ pick among the skills it ships — which is what you want when one package bundl
 ```
 Skills for MyApp.slnx  page 1 of 3
 
-  up/down move   left/right page   space toggle
-  a all   c none   enter confirm   esc cancel
+  move (up/down)   change page (left/right)   toggle selection (space)
+  select all (a)   clear all (c)   confirm (enter)   cancel (esc)
 
 > [x] contoso.widgets-widget-usage    installed  Contoso.Widgets 2.3.0
   [ ] contoso.widgets-widget-testing  new        Contoso.Widgets 2.3.0
@@ -96,7 +96,8 @@ Skills for MyApp.slnx  page 1 of 3
   2 of 24 selected   1 to remove
 ```
 
-The legend shows the keys you need; these all work:
+The legend names the action first and the key second, and lists only what applies — a single
+page drops "change page", a single skill drops the rest. These all work:
 
 | Key | Does |
 | --- | --- |
@@ -112,7 +113,7 @@ The frame is sized to what it holds. At most ten skills a page, because a list l
 scroll off the top is a list nobody reads before agreeing to it — but a repository with one skill
 gets a four-line prompt, not a screenful of blank rows, and a last page with two skills ends after
 the second. Keys that would do nothing are left out: no page counter when there is only one page,
-no movement keys when there is only one skill.
+no movement or select-all keys when there is only one skill.
 
 Skills you already have start selected, so pressing enter straight away changes
 nothing and a new skill is always an explicit opt-in.
