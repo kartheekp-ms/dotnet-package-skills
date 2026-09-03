@@ -32,8 +32,76 @@ public class SkillPickerTests
         Assert.Contains("[ ] skill-01", frame);
         Assert.Contains("[x] skill-02", frame);
         Assert.Contains("installed", frame);
-        Assert.Contains("new", frame);
+        // A row that changes nothing says nothing: skill-01 is unticked and not installed.
+        Assert.DoesNotContain("new", frame);
     }
+
+    [Fact]
+    public void The_status_says_what_confirming_would_do()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(4, installed: [2, 4]), Title);
+
+        var rows = Rows(terminal.Frames[0]);
+
+        // Untouched and not installed: nothing will happen, so nothing is said.
+        Assert.Equal("[ ] skill-01 (Package.1 1.0.0)", rows[0]);
+        Assert.Equal("[x] skill-02 (Package.2 1.0.0)  installed", rows[1]);
+    }
+
+    [Fact]
+    public void Ticking_a_new_skill_says_it_will_be_installed()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(3), Title);
+
+        Assert.DoesNotContain("will install", terminal.Frames[0]);
+        Assert.Contains("[x] skill-01 (Package.1 1.0.0)  will install", Rows(terminal.Frames[1]));
+    }
+
+    [Fact]
+    public void Unticking_an_installed_skill_says_it_will_be_removed()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(3, installed: [1]), Title);
+
+        Assert.Contains("[x] skill-01 (Package.1 1.0.0)  installed", Rows(terminal.Frames[0]));
+        Assert.Contains("[ ] skill-01 (Package.1 1.0.0)  will remove", Rows(terminal.Frames[1]));
+    }
+
+    [Fact]
+    public void Ticking_a_skill_back_on_clears_the_pending_removal()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Spacebar, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(3, installed: [1]), Title);
+
+        Assert.Contains("will remove", terminal.Frames[1]);
+        // Back where it started, so the warning has to go with it.
+        Assert.DoesNotContain("will remove", terminal.Frames[2]);
+        Assert.Contains("[x] skill-01 (Package.1 1.0.0)  installed", Rows(terminal.Frames[2]));
+    }
+
+    [Fact]
+    public void The_package_sits_beside_the_skill_it_came_from()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(3), Title);
+
+        Assert.Contains("skill-01 (Package.1 1.0.0)", terminal.Frames[0]);
+    }
+
+    /// <summary>The skill rows of a frame, trimmed of the cursor column and padding.</summary>
+    private static List<string> Rows(string frame) =>
+    [
+        .. frame.Split(Environment.NewLine)
+            .Where(line => line.Contains('[', StringComparison.Ordinal))
+            .Select(line => line[2..].TrimEnd()),
+    ];
 
     [Fact]
     public void Pressing_enter_immediately_keeps_exactly_what_is_installed()
@@ -507,7 +575,7 @@ public class SkillPickerTests
     {
         const string Name = "contoso.widgets-a-name-of-some-considerable-length-indeed";
 
-        static int LabelColumnAt(int windowWidth)
+        static int StatusColumnAt(int windowWidth)
         {
             var terminal = new FakeTerminal(windowWidth: windowWidth).Press(ConsoleKey.Enter);
 
@@ -515,19 +583,19 @@ public class SkillPickerTests
                 [
                     new SkillPickerItem(
                         new BundledSkill("Contoso.Widgets", "2.3.0", Name, "/p", Name),
-                        Installed: false),
+                        Installed: true),
                 ],
                 Title);
 
             return terminal.Frames[0]
                 .Split(Environment.NewLine)
                 .Single(line => line.StartsWith("> [", StringComparison.Ordinal))
-                .IndexOf("new", StringComparison.Ordinal);
+                .IndexOf("installed", StringComparison.Ordinal);
         }
 
-        // Where the label starts is where the name column ends, so a wider window pushing it
+        // Where the status starts is where the name column ends, so a wider window pushing it
         // right is the column growing.
-        Assert.True(LabelColumnAt(120) > LabelColumnAt(60), "a wider terminal should give the name more room");
+        Assert.True(StatusColumnAt(140) > StatusColumnAt(70), "a wider terminal should give the name more room");
     }
 
     [Fact]

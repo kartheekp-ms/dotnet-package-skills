@@ -20,10 +20,10 @@ internal sealed class SkillPicker(ITerminal terminal)
     private const int ChromeRows = 7;
 
     /// <summary>
-    /// Columns a skill row spends on everything except the name and the package: the cursor
-    /// and checkbox that open it, and the gaps either side of the installed/new label.
+    /// Columns a skill row spends on everything except the name and the status: the cursor and
+    /// checkbox that open it, and the gap before the status.
     /// </summary>
-    private const int RowFurniture = 6 + 2 + 2;
+    private const int RowFurniture = 6 + 2;
 
     /// <summary>
     /// Narrowest the name column is allowed to get before it stops giving ground to the
@@ -32,7 +32,12 @@ internal sealed class SkillPicker(ITerminal terminal)
     private const int MinNameWidth = 12;
 
     private const string InstalledLabel = "installed";
-    private const string NewLabel = "new";
+    private const string WillInstallLabel = "will install";
+    private const string WillRemoveLabel = "will remove";
+
+    /// <summary>Widest any status can be, so the column is one width for every row.</summary>
+    private static readonly int StatusWidth =
+        new[] { InstalledLabel, WillInstallLabel, WillRemoveLabel }.Max(label => label.Length);
 
     /// <summary>
     /// Legend for browsing: what you do while looking around, then the key that does it.
@@ -274,11 +279,30 @@ internal sealed class SkillPicker(ITerminal terminal)
         return height;
     }
 
-    private static string Row(SkillPickerItem item, bool focused, bool isSelected, int nameWidth) =>
-        $"{(focused ? '>' : ' ')} [{(isSelected ? 'x' : ' ')}] " +
-        $"{Fit(item.Skill.RelativePath, nameWidth).PadRight(nameWidth)}  " +
-        $"{(item.Installed ? InstalledLabel : NewLabel).PadRight(InstalledLabel.Length)}  " +
-        $"{item.Skill.PackageId} {item.Skill.PackageVersion}";
+    private static string Row(SkillPickerItem item, bool focused, bool isSelected, int nameWidth)
+    {
+        var name = $"{item.Skill.RelativePath} ({item.Skill.PackageId} {item.Skill.PackageVersion})";
+
+        return $"{(focused ? '>' : ' ')} [{(isSelected ? 'x' : ' ')}] " +
+               $"{Fit(name, nameWidth).PadRight(nameWidth)}  " +
+               Status(item, isSelected);
+    }
+
+    /// <summary>
+    /// What confirming would do to this row, rather than what it is.
+    /// </summary>
+    /// <remarks>
+    /// The column used to read "new" or "installed", which classified the skill instead of
+    /// telling you the consequence of the box beside it — and on a first run every row said
+    /// "new", so a whole column carried nothing. A row that changes nothing now says nothing.
+    /// </remarks>
+    private static string Status(SkillPickerItem item, bool isSelected) => (item.Installed, isSelected) switch
+    {
+        (false, true) => WillInstallLabel,
+        (true, false) => WillRemoveLabel,
+        (true, true) => InstalledLabel,
+        _ => string.Empty,
+    };
 
     private static string Summary(IReadOnlyList<SkillPickerItem> items, HashSet<int> selected)
     {
@@ -313,22 +337,22 @@ internal sealed class SkillPicker(ITerminal terminal)
     };
 
     /// <summary>
-    /// Width of the skill-name column: as wide as the longest name, unless the terminal is too
-    /// narrow to carry that alongside the package it came from.
+    /// Width of the name column, which carries the skill and the package it came from: as wide
+    /// as the longest of those, unless the terminal is too narrow to hold it beside the status.
     /// </summary>
     /// <remarks>
-    /// This used to be capped at a constant, so a wide terminal still truncated a long name
-    /// with a screenful of empty space to its right. The only real limit is the window.
+    /// This used to be capped at a constant, so a long name lost its tail even on a
+    /// two-hundred-column window. The only real limit is the window.
     /// </remarks>
     private static int MeasureNameWidth(IReadOnlyList<SkillPickerItem> items, int windowWidth)
     {
-        var longestName = items.Max(item => item.Skill.RelativePath.Length);
-        var longestPackage = items.Max(item =>
-            item.Skill.PackageId.Length + 1 + item.Skill.PackageVersion.Length);
+        var longest = items.Max(item =>
+            item.Skill.RelativePath.Length + item.Skill.PackageId.Length +
+            item.Skill.PackageVersion.Length + 4);
 
-        var available = windowWidth - 1 - RowFurniture - InstalledLabel.Length - longestPackage;
+        var available = windowWidth - 1 - RowFurniture - StatusWidth;
 
-        return Math.Min(longestName, Math.Max(MinNameWidth, available));
+        return Math.Min(longest, Math.Max(MinNameWidth, available));
     }
 
     /// <summary>Frame dimensions, measured once so every redraw lands on the same grid.</summary>
@@ -366,7 +390,10 @@ internal sealed class SkillPicker(ITerminal terminal)
                 WidestSummary(items.Count) + 2,
             };
 
+            // Both tick states, because the status changes with the box and "will install" is
+            // wider than "installed". Measuring only one leaves the other clipped.
             content.AddRange(items.Select(item => Row(item, focused: true, isSelected: true, nameWidth).Length));
+            content.AddRange(items.Select(item => Row(item, focused: true, isSelected: false, nameWidth).Length));
 
             // Stay a column short of the window so a full-width line cannot wrap.
             return new Layout(pageSize, pages, nameWidth, Math.Min(content.Max(), windowWidth - 1));

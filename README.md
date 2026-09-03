@@ -88,13 +88,17 @@ Skills for MyApp.slnx  page 1 of 3
   move (up/down)   change page (left/right)   toggle selection (space)
   select all (a)   clear all (c)   confirm (enter)   cancel (esc)
 
-> [x] contoso.widgets-widget-usage    installed  Contoso.Widgets 2.3.0
-  [ ] contoso.widgets-widget-testing  new        Contoso.Widgets 2.3.0
-  [x] mockly-usage                    installed  Mockly 1.10.0
-  [ ] serilog-console-guidance        new        Serilog.Sinks.Console 5.0.1
+> [x] contoso.widgets-usage (Contoso.Widgets 2.3.0)      will install
+  [ ] contoso.widgets-testing (Contoso.Widgets 2.3.0)
+  [x] mockly-usage (Mockly 1.10.0)                       installed
+  [ ] mockly-setup (Mockly 1.10.0)                       will remove
 
   2 of 24 selected   1 to remove
 ```
+
+The right-hand column is what confirming would *do*, not what the skill is. A row you have not
+touched changes nothing, so it says nothing. Tick a new skill and it reads `will install`; untick
+one you already have and it reads `will remove`, until you tick it back.
 
 The legend names the action first and the key second, and lists only what applies — a single
 page drops "change page", a single skill drops the rest. These all work:

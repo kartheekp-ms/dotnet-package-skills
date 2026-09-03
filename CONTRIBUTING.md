@@ -111,6 +111,12 @@ already been told what it means; the reader is asking what they can do here, so 
 (space)" answers that and the key follows. This came out of watching a demo land badly, which is
 worth more than any amount of arguing about it beforehand.
 
+**A row says what confirming would do to it, not what it is.** The status column read "new" or
+"installed", which classified the skill and left the reader to work out the consequence — and on
+a first run every row said "new", so a whole column carried nothing. It now says `will install`,
+`will remove`, or `installed`, and a row that changes nothing says nothing at all. `Layout`
+measures rows in both tick states because the status changes with the box.
+
 **The picker owns the terminal, so it has to hand it back.** `Choose` hides the cursor and takes
 Ctrl+C as input, and restores both in a `finally`. Ctrl+C is why: left to the runtime it ends the
 process mid-frame, so the restore never runs and the user is left typing into a terminal with no
