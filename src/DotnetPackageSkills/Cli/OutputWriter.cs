@@ -76,12 +76,11 @@ public sealed class OutputWriter(TextWriter output)
         {
             output.WriteLine();
 
-            // One sentence per line. Hard-wrapping prose to a guessed width puts a break in
-            // the middle of a clause and fights whatever width the reader actually has.
+            // One line, however long. Any break we choose is a guess at the reader's width,
+            // and the terminal already knows theirs.
             output.WriteLine(
                 "These skills are instructions written by the package authors, " +
-                "and your coding agent will follow them.");
-            output.WriteLine("Review them before relying on them.");
+                "and your coding agent will follow them. Review them before relying on them.");
         }
     }
 

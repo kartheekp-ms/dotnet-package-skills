@@ -85,8 +85,7 @@ public sealed class PackageLister(DotnetCli dotnet)
                  'dotnet restore "{target}"' failed with exit code {restore.ExitCode}:
                  {restore.Diagnostics}
 
-                 Restore has to succeed before bundled skills can be located, because the
-                 packages are only extracted to disk during restore.
+                 Restore has to succeed before bundled skills can be located, because the packages are only extracted to disk during restore.
                  """);
         }
     }

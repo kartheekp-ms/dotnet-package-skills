@@ -140,9 +140,7 @@ namespace DotnetPackageSkills.Cli
                 """
                 Copies agent skills bundled inside NuGet packages into a folder your coding agent reads.
 
-                Package authors ship skills at skills/<package-id>-<skill-name>/SKILL.md inside the
-                package. Restore extracts them to the NuGet global packages folder, which is outside
-                your repository and which no coding agent scans. This tool bridges that gap.
+                Package authors ship skills at skills/<package-id>-<skill-name>/SKILL.md inside the package. Restore extracts them to the NuGet global packages folder, which is outside your repository and which no coding agent scans. This tool bridges that gap.
                 """)
             {
                 install, list, uninstall,

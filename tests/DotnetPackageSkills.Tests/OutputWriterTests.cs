@@ -6,18 +6,19 @@ namespace DotnetPackageSkills.Tests;
 public class OutputWriterTests
 {
     [Fact]
-    public void The_trust_notice_is_not_broken_mid_sentence()
+    public void The_trust_notice_is_a_single_line()
     {
         using var output = new StringWriter();
 
         new OutputWriter(output).WriteInstallReport(ResultWithCollision(), copied: true);
 
-        // It used to wrap at a guessed width, splitting "your coding / agent will follow
-        // them" across two lines. Terminals wrap for themselves; a hard break just puts
-        // the seam somewhere the reader's width did not ask for.
-        var report = output.ToString();
-        Assert.Contains("your coding agent will follow them.", report);
-        Assert.Contains("Review them before relying on them.", report);
+        // Any break we pick is a guess at the reader's width. It is one thought, so it goes
+        // out as one line and the terminal wraps it wherever it needs to.
+        var notice = output.ToString()
+            .Split(Environment.NewLine)
+            .Single(line => line.StartsWith("These skills are", StringComparison.Ordinal));
+
+        Assert.EndsWith("Review them before relying on them.", notice);
     }
 
     [Fact]
