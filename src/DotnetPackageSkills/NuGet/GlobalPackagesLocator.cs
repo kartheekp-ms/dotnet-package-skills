@@ -55,8 +55,7 @@ public sealed class GlobalPackagesLocator(DotnetCli dotnet)
         {
             throw new PackageSkillsException(
                 $"""
-                 Could not find the global packages path in the output of
-                 'dotnet nuget locals global-packages --list':
+                 Could not find the global packages path in the output of 'dotnet nuget locals global-packages --list':
                  {result.StandardOutput.Trim()}
                  """);
         }
@@ -65,8 +64,8 @@ public sealed class GlobalPackagesLocator(DotnetCli dotnet)
         {
             throw new PackageSkillsException(
                 $"""
-                 NuGet reports its global packages folder as '{path}', but that directory
-                 does not exist. Restore the project first — restore is what creates it.
+                 NuGet reports its global packages folder as '{path}', but that directory does not exist.
+                 Restore the project first — restore is what creates it.
                  """);
         }
 

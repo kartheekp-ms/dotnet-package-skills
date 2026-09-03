@@ -155,8 +155,8 @@ public sealed class PackageLister(DotnetCli dotnet)
             $"""
              Could not parse the output of 'dotnet list package --format json'.
 
-             If the error above mentions an unrecognized '--format' option, the installed
-             SDK predates 7.0.200 and needs upgrading. Raw output:
+             If the error above mentions an unrecognized '--format' option, the installed SDK predates 7.0.200 and needs upgrading.
+             Raw output:
              {json.Trim()}
              """);
 

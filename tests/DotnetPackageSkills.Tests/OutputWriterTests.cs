@@ -6,6 +6,46 @@ namespace DotnetPackageSkills.Tests;
 public class OutputWriterTests
 {
     [Fact]
+    public void The_trust_notice_is_not_broken_mid_sentence()
+    {
+        using var output = new StringWriter();
+
+        new OutputWriter(output).WriteInstallReport(ResultWithCollision(), copied: true);
+
+        // It used to wrap at a guessed width, splitting "your coding / agent will follow
+        // them" across two lines. Terminals wrap for themselves; a hard break just puts
+        // the seam somewhere the reader's width did not ask for.
+        var report = output.ToString();
+        Assert.Contains("your coding agent will follow them.", report);
+        Assert.Contains("Review them before relying on them.", report);
+    }
+
+    [Fact]
+    public void No_reported_line_breaks_in_the_middle_of_a_sentence()
+    {
+        using var output = new StringWriter();
+
+        new OutputWriter(output).WriteInstallReport(ResultWithCollision(), copied: true);
+
+        // A line that ends without terminal punctuation, followed by one starting lower
+        // case, is prose someone hard-wrapped. Indented lines are data, not prose.
+        var lines = output.ToString()
+            .Split(Environment.NewLine)
+            .Where(line => line.Length > 0 && !line.StartsWith(' '))
+            .ToList();
+
+        for (var index = 0; index < lines.Count - 1; index++)
+        {
+            var ends = lines[index].TrimEnd();
+            var next = lines[index + 1];
+
+            Assert.False(
+                ends.Length > 0 && ends[^1] is not ('.' or ':' or '!' or '?') && char.IsLower(next[0]),
+                $"'{ends}' looks hard-wrapped into '{next}'");
+        }
+    }
+
+    [Fact]
     public void Install_report_warns_about_skipped_collisions()
     {
         using var output = new StringWriter();

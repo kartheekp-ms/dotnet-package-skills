@@ -76,10 +76,13 @@ public sealed class OutputWriter(TextWriter output)
         if (result.Skills.Count > 0 && copied && !result.DryRun)
         {
             output.WriteLine();
+
+            // One sentence per line. Hard-wrapping prose to a guessed width puts a break in
+            // the middle of a clause and fights whatever width the reader actually has.
             output.WriteLine(
-                "These skills are instructions written by the package authors, and your coding");
-            output.WriteLine(
-                "agent will follow them. Review them before relying on them.");
+                "These skills are instructions written by the package authors, " +
+                "and your coding agent will follow them.");
+            output.WriteLine("Review them before relying on them.");
         }
     }
 
