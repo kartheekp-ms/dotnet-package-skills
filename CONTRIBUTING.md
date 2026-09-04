@@ -61,6 +61,12 @@ groups copied skill folder names under their package id and version; pruning and
 only on those names. Users keep their own hand-written skills in the same folder, and deleting one
 of those would be unforgivable.
 
+**An unreadable manifest stops every operation that needs ownership.** Never treat a malformed or
+unreadable manifest as empty. Empty means the existing folders are user-owned; corrupt means their
+ownership is unknown. `install` and `uninstall` must fail before changing anything and preserve the
+file so the user can repair or restore it. `list` may still run because it does not read ownership
+or write anything.
+
 **No tracked skills means no manifest and no folder.** When the last entry goes, `install` and
 `uninstall` both delete `.dotnet-package-skills.json` and drop the destination folder if it is
 empty, so a repository where nothing ships a skill never grows a stray `.agents/skills/`. The

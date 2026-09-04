@@ -355,6 +355,11 @@ package.
 on paths listed there, never on whatever happens to be in the destination folder, so skills you
 wrote yourself are never at risk of being deleted.
 
+If that manifest exists but cannot be read, `install` and `uninstall` stop without changing
+anything and preserve the file for repair. Resolve any merge conflict or restore it from source
+control before retrying. If it cannot be recovered, move the whole destination folder aside before
+installing again; the tool will not guess which existing folders it owns.
+
 ## A note on trust
 
 A bundled skill is a set of instructions written by a third party that your agent will then

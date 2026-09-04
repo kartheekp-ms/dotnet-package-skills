@@ -552,14 +552,80 @@ public class SkillInstallerTests
     }
 
     [Fact]
-    public void A_corrupt_manifest_does_not_block_installing()
+    public void A_corrupt_manifest_blocks_install_and_preserves_everything()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(
+            destination,
+            [Skill(temp, "Contoso.Widgets", "2.3.0", "already-installed")],
+            dryRun: false);
+
+        var manifest = Path.Combine(destination, InstallManifest.FileName);
+        const string corrupt = "{ not json";
+        File.WriteAllText(manifest, corrupt);
+
+        var error = Assert.Throws<PackageSkillsException>(() =>
+            _installer.Install(
+                destination,
+                [Skill(temp, "Mockly", "1.10.0", "not-installed")],
+                dryRun: false));
+
+        Assert.Contains(manifest, error.Message);
+        Assert.Contains("preserved", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(corrupt, File.ReadAllText(manifest));
+        Assert.True(File.Exists(Path.Combine(destination, "already-installed", "SKILL.md")));
+        Assert.False(Directory.Exists(Path.Combine(destination, "not-installed")));
+    }
+
+    [Fact]
+    public void A_corrupt_manifest_blocks_uninstall_and_preserves_everything()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(
+            destination,
+            [Skill(temp, "Mockly", "1.10.0", "mockly")],
+            dryRun: false);
+
+        var manifest = Path.Combine(destination, InstallManifest.FileName);
+        const string corrupt = """
+            <<<<<<< HEAD
+            {"installed":[]}
+            =======
+            {"installed":[]}
+            >>>>>>> feature
+            """;
+        File.WriteAllText(manifest, corrupt);
+
+        var error = Assert.Throws<PackageSkillsException>(() =>
+            _installer.Uninstall(
+                destination,
+                packageId: null,
+                packageVersion: null,
+                dryRun: false));
+
+        Assert.Contains(manifest, error.Message);
+        Assert.Equal(corrupt, File.ReadAllText(manifest));
+        Assert.True(File.Exists(Path.Combine(destination, "mockly", "SKILL.md")));
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("""{"installed":null}""")]
+    [InlineData("""{"installed":[{"package":null,"version":"1.0.0","skills":["mockly"]}]}""")]
+    [InlineData("""{"installed":[{"package":"Mockly","version":"1.0.0","skills":[null]}]}""")]
+    [InlineData("""{"installed":[{"package":"Mockly","version":"1.0.0","skills":["../outside"]}]}""")]
+    public void A_manifest_with_an_unusable_shape_fails_instead_of_crashing_later(string contents)
     {
         using var temp = new TempDirectory();
         var destination = temp.CreateDirectory("dest");
-        File.WriteAllText(Path.Combine(destination, InstallManifest.FileName), "{ not json");
+        var manifest = Path.Combine(destination, InstallManifest.FileName);
+        File.WriteAllText(manifest, contents);
 
-        _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly")], dryRun: false);
+        var error = Assert.Throws<PackageSkillsException>(() => InstallManifest.Load(destination));
 
-        Assert.True(File.Exists(Path.Combine(destination, "mockly", "SKILL.md")));
+        Assert.Contains("could not read", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(contents, File.ReadAllText(manifest));
     }
 }

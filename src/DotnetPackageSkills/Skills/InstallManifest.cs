@@ -49,11 +49,13 @@ public sealed class InstallManifest
     [JsonPropertyName("installed")]
     public List<ManifestEntry> Installed { get; set; } = [];
 
-    /// <summary>
-    /// Loads the manifest, treating any unreadable or malformed file as empty. A corrupt
-    /// manifest should degrade into "nothing is tracked yet" rather than blocking the user
-    /// from installing; the worst case is a stale folder left behind, which is recoverable.
-    /// </summary>
+    /// <summary>Loads and validates the manifest without changing it.</summary>
+    /// <remarks>
+    /// An unreadable manifest cannot safely mean "nothing is tracked." Doing that makes every
+    /// folder this tool installed look user-owned, so install refuses to update it and uninstall
+    /// refuses to remove it. Stop instead: ownership is unknown, and guessing could overwrite or
+    /// delete a hand-authored skill.
+    /// </remarks>
     public static InstallManifest Load(string destinationRoot)
     {
         var path = System.IO.Path.Combine(destinationRoot, FileName);
@@ -65,14 +67,82 @@ public sealed class InstallManifest
 
         try
         {
-            return JsonSerializer.Deserialize<InstallManifest>(File.ReadAllText(path), SerializerOptions)
-                ?? new InstallManifest();
+            var manifest = JsonSerializer.Deserialize<InstallManifest>(
+                File.ReadAllText(path),
+                SerializerOptions);
+
+            return Validate(manifest, path);
         }
-        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        catch (JsonException ex)
         {
-            return new InstallManifest();
+            throw CannotRead(path, "it is not valid JSON", ex);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw CannotRead(path, "the file could not be opened", ex);
         }
     }
+
+    private static InstallManifest Validate(InstallManifest? manifest, string path)
+    {
+        if (manifest is null)
+        {
+            throw CannotRead(path, "it must contain a JSON object");
+        }
+
+        if (manifest.Installed is null)
+        {
+            throw CannotRead(path, "'installed' must be an array");
+        }
+
+        for (var entryIndex = 0; entryIndex < manifest.Installed.Count; entryIndex++)
+        {
+            var entry = manifest.Installed[entryIndex];
+
+            if (entry is null)
+            {
+                throw CannotRead(path, $"'installed[{entryIndex}]' must be an object");
+            }
+
+            if (string.IsNullOrWhiteSpace(entry.Package))
+            {
+                throw CannotRead(path, $"'installed[{entryIndex}].package' must be text");
+            }
+
+            if (string.IsNullOrWhiteSpace(entry.Version))
+            {
+                throw CannotRead(path, $"'installed[{entryIndex}].version' must be text");
+            }
+
+            if (entry.Skills is null)
+            {
+                throw CannotRead(path, $"'installed[{entryIndex}].skills' must be an array");
+            }
+
+            for (var skillIndex = 0; skillIndex < entry.Skills.Count; skillIndex++)
+            {
+                if (!SkillDiscovery.IsSafeSkillName(entry.Skills[skillIndex]))
+                {
+                    throw CannotRead(
+                        path,
+                        $"'installed[{entryIndex}].skills[{skillIndex}]' is not a safe skill folder name");
+                }
+            }
+        }
+
+        return manifest;
+    }
+
+    private static PackageSkillsException CannotRead(
+        string path,
+        string reason,
+        Exception? inner = null) =>
+        new(
+            $"Could not read the install manifest '{path}' because {reason}. " +
+            "No skills were changed and the file was preserved. Resolve any merge conflict or " +
+            "restore the file, then try again. If it cannot be recovered, move the destination " +
+            "folder aside before reinstalling.",
+            inner);
 
     public void Save(string destinationRoot)
     {
