@@ -169,7 +169,7 @@ happening.
 | `-i, --interactive` | uninstall | Choose which installed skills to remove. Lists only what this tool installed. Not with `--json`. |
 | `-p, --package <ID[@VERSION]>` | uninstall | Remove only skills from this package — every version, or one. |
 | `--dry-run` | install, uninstall | Report what would change without writing anything. |
-| `--json` | all | Machine-readable output, for scripts and agents. |
+| `--json` | all | One JSON object on stdout instead of the report. See [Scripting it](#scripting-it). |
 
 ### Targeting another agent's folder
 
@@ -186,6 +186,67 @@ what you put in `.claude/skills` means saying so again.
 ```bash
 dotnet package-skills uninstall --destination .claude/skills
 ```
+
+### Scripting it
+
+`--json` replaces the report with a single object on stdout. It changes nothing else: the same
+work happens and the same exit code comes back.
+
+A skill is spelled the same way everywhere it appears, in every command, so one reader handles
+all of them:
+
+| Field | Meaning |
+| --- | --- |
+| `packageId` | Package id, in NuGet's casing. |
+| `packageVersion` | Resolved version. |
+| `skillName` | Skill folder name inside the package. |
+| `relativePath` | Where it sits under the destination, with forward slashes. |
+| `sourcePath` | Where it was read from. Absent once the skill is gone. |
+| `reason` | Why it was passed over. Only on `skipped`. |
+
+`install` and `list` return the same shape:
+
+```json
+{
+  "target": "/repo/App.slnx",
+  "globalPackagesFolder": "/home/you/.nuget/packages",
+  "destination": "/repo/.agents/skills",
+  "packagesScanned": 7,
+  "dryRun": false,
+  "skills": [
+    {
+      "packageId": "Contoso.Widgets",
+      "packageVersion": "2.3.0",
+      "skillName": "contoso.widgets-usage",
+      "sourcePath": "/home/you/.nuget/packages/contoso.widgets/2.3.0/skills/contoso.widgets-usage",
+      "relativePath": "contoso.widgets-usage"
+    }
+  ],
+  "skillsDiscovered": 35,
+  "removed": [],
+  "skipped": [],
+  "notOnDisk": []
+}
+```
+
+`skillsDiscovered` counts what was found, while `skills` lists what was installed, so a script can
+tell "no package ships a skill" apart from "you chose none of the ones that do". `target` is left
+out entirely when you name packages with `--package`. `list` always reports `"dryRun": true`.
+
+`uninstall` returns `destination`, `dryRun`, and `removed`.
+
+Failures print to **stderr** and exit non-zero, leaving stdout empty rather than half an object.
+So check the exit code before parsing — piping straight into a parser gives it nothing to read:
+
+```bash
+if json=$(dotnet package-skills list --json); then
+  echo "$json" | jq -r '.skills[].skillName'
+else
+  echo "failed" >&2
+fi
+```
+
+`--json` cannot be combined with `--interactive`: a script has nobody to answer the prompt.
 
 ## What you get
 
@@ -221,6 +282,10 @@ The manifest groups the copied skill folder names by package and version:
   ]
 }
 ```
+
+The manifest keeps its own wording — `package`, `version`, `skills` — rather than the
+`packageId`/`packageVersion`/`skillName` that `--json` uses. It is a stored file, and renaming its
+fields would strand every manifest already written to disk.
 
 Package authors should prefix every folder with their lowercased package id, as shown above. This
 keeps names globally unique when skills from many packages share one destination. The convention is

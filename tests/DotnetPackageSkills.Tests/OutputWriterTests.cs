@@ -65,7 +65,9 @@ public class OutputWriterTests
     {
         using var output = new StringWriter();
 
-        new OutputWriter(output).WriteJson(ResultWithCollision());
+        // Through JsonReport, because that is what the command does. Handing the writer a
+        // domain record would test a path production no longer takes.
+        new OutputWriter(output).WriteJson(JsonReport.For(ResultWithCollision()));
 
         var json = output.ToString();
         Assert.Contains("\"skipped\"", json);

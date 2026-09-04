@@ -109,7 +109,10 @@ namespace DotnetPackageSkills.Cli
                     return;
                 }
 
-                Report(parseResult, writer => writer.WriteInstallReport(result, copied: true), result);
+                Report(
+                    parseResult,
+                    writer => writer.WriteInstallReport(result, copied: true),
+                    JsonReport.For(result));
             }));
 
             var list = new Command("list", "Show which packages ship skills, without copying anything.")
@@ -121,7 +124,10 @@ namespace DotnetPackageSkills.Cli
             {
                 var request = BuildRequest(parseResult) with { DryRun = true };
                 var result = new SkillInstallService(new ProcessRunner()).Discover(request);
-                Report(parseResult, writer => writer.WriteInstallReport(result, copied: false), result);
+                Report(
+                    parseResult,
+                    writer => writer.WriteInstallReport(result, copied: false),
+                    JsonReport.For(result));
             }));
 
             var uninstallInteractive = new Option<bool>("--interactive", "-i")
@@ -171,7 +177,7 @@ namespace DotnetPackageSkills.Cli
                 Report(
                     parseResult,
                     writer => writer.WriteUninstallReport(removed, root, isDryRun),
-                    new { destination = root, dryRun = isDryRun, removed });
+                    JsonReport.ForUninstall(removed, root, isDryRun));
             }));
 
             return new RootCommand(
