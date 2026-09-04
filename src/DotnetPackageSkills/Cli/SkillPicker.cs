@@ -1,17 +1,30 @@
-using DotnetPackageSkills.Skills;
-
 namespace DotnetPackageSkills.Cli;
 
-/// <summary>One row in the picker: a discovered skill and whether it is already installed.</summary>
-internal sealed record SkillPickerItem(BundledSkill Skill, bool Installed);
+/// <summary>Whether the picker is choosing what to add or what to take away.</summary>
+/// <remarks>
+/// It changes what a tick means, and so what the row says next to it. Installing, a tick keeps
+/// the skill and the interesting rows are the ones you changed. Uninstalling, a tick marks the
+/// skill for removal, and nothing starts ticked because pressing enter by mistake should not
+/// delete anything.
+/// </remarks>
+internal enum PickerMode
+{
+    Install,
+    Uninstall,
+}
+
+/// <summary>One row in the picker.</summary>
+/// <param name="Name">Skill folder name, which is also its name in the destination.</param>
+/// <param name="Installed">Whether it is in the destination already.</param>
+internal sealed record SkillPickerItem(string Name, string Package, string Version, bool Installed);
 
 /// <summary>
-/// Lets the user choose which discovered skills to install, a page at a time.
+/// Lets the user choose which skills to act on, a page at a time.
 /// </summary>
 /// <remarks>
 /// Paging is not decoration. A solution can reference many packages that ship skills, and a list
-/// long enough to scroll off the top is a list nobody reads before agreeing to it. The frame is a
-/// fixed height and redraws in place, so only one page is ever on screen.
+/// long enough to scroll off the top is a list nobody reads before agreeing to it. The frame
+/// fits the window and redraws in place, so only one page is ever on screen.
 /// </remarks>
 internal sealed class SkillPicker(ITerminal terminal)
 {
@@ -92,31 +105,41 @@ internal sealed class SkillPicker(ITerminal terminal)
     }
 
     /// <summary>
-    /// Runs the picker. Returns null when the user cancelled, in which case nothing should be
-    /// written to the destination.
+    /// Runs the picker. Returns the names the user ticked, or null when they cancelled, in
+    /// which case nothing should be written to the destination.
     /// </summary>
-    public SkillChoice? Choose(IReadOnlyList<SkillPickerItem> items, string title)
+    public IReadOnlySet<string>? Choose(
+        IReadOnlyList<SkillPickerItem> items,
+        string title,
+        PickerMode mode = PickerMode.Install)
     {
         if (items.Count == 0)
         {
-            return new SkillChoice([], []);
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         }
 
         if (terminal.IsRedirected)
         {
             throw new PackageSkillsException(
-                "--interactive needs a terminal, but input or output is redirected. " +
-                "Drop --interactive to install every discovered skill, or name the ones you want " +
-                "with --package.");
+                mode == PickerMode.Install
+                    ? "--interactive needs a terminal, but input or output is redirected. " +
+                      "Drop --interactive to install every discovered skill, or name the ones you want " +
+                      "with --package."
+                    : "--interactive needs a terminal, but input or output is redirected. " +
+                      "Drop --interactive to remove every installed skill, or name the package you " +
+                      "mean with --package.");
         }
 
-        // Pre-check what is already installed so pressing enter immediately changes nothing.
+        // Installing, what is already there starts ticked so pressing enter changes nothing.
+        // Uninstalling, a tick means "delete this", so nothing starts ticked for the same reason.
         var selected = new HashSet<int>(
-            items.Select((item, index) => (item, index))
-                .Where(entry => entry.item.Installed)
-                .Select(entry => entry.index));
+            mode == PickerMode.Install
+                ? items.Select((item, index) => (item, index))
+                    .Where(entry => entry.item.Installed)
+                    .Select(entry => entry.index)
+                : []);
 
-        var layout = Layout.For(terminal, items, title);
+        var layout = Layout.For(terminal, items, title, mode);
         var cursor = 0;
 
         terminal.CursorVisible = false;
@@ -134,7 +157,7 @@ internal sealed class SkillPicker(ITerminal terminal)
 
             while (true)
             {
-                height = Render(items, selected, cursor, layout, title, frameTop);
+                height = Render(items, selected, cursor, layout, title, frameTop, mode);
 
                 var key = terminal.ReadKey();
 
@@ -180,7 +203,7 @@ internal sealed class SkillPicker(ITerminal terminal)
                         selected.Clear();
                         break;
                     case ConsoleKey.Enter:
-                        height = Render(items, selected, cursor, layout, title, frameTop);
+                        height = Render(items, selected, cursor, layout, title, frameTop, mode);
                         Close(frameTop + height);
                         return Result(items, selected);
                     case ConsoleKey.Escape or ConsoleKey.Q:
@@ -196,14 +219,14 @@ internal sealed class SkillPicker(ITerminal terminal)
         }
     }
 
-    private static SkillChoice Result(IReadOnlyList<SkillPickerItem> items, HashSet<int> selected) =>
-        new(
-            [.. items.Where((_, index) => selected.Contains(index)).Select(item => item.Skill)],
-            [
-                .. items
-                    .Where((item, index) => item.Installed && !selected.Contains(index))
-                    .Select(item => item.Skill.RelativePath),
-            ]);
+    /// <summary>
+    /// The names ticked when the user confirmed. What that means is the caller's business:
+    /// installing it is what to keep, uninstalling it is what to delete.
+    /// </summary>
+    private static IReadOnlySet<string> Result(IReadOnlyList<SkillPickerItem> items, HashSet<int> selected) =>
+        items.Where((_, index) => selected.Contains(index))
+            .Select(item => item.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Writes the frame's worth of blank lines so any scrolling happens before the first render,
@@ -237,7 +260,8 @@ internal sealed class SkillPicker(ITerminal terminal)
         int cursor,
         Layout layout,
         string title,
-        int frameTop)
+        int frameTop,
+        PickerMode mode)
     {
         var page = cursor / layout.PageSize;
         var first = page * layout.PageSize;
@@ -258,11 +282,13 @@ internal sealed class SkillPicker(ITerminal terminal)
         for (var row = 0; row < rows; row++)
         {
             var index = first + row;
-            WriteRow(Row(items[index], index == cursor, selected.Contains(index), layout.NameWidth), width);
+            WriteRow(
+                Row(items[index], index == cursor, selected.Contains(index), layout.NameWidth, mode),
+                width);
         }
 
         WriteRow(string.Empty, width);
-        WriteRow($"  {Summary(items, selected)}", width);
+        WriteRow($"  {Summary(items, selected, mode)}", width);
 
         var height = ChromeRows + rows;
 
@@ -279,13 +305,18 @@ internal sealed class SkillPicker(ITerminal terminal)
         return height;
     }
 
-    private static string Row(SkillPickerItem item, bool focused, bool isSelected, int nameWidth)
+    private static string Row(
+        SkillPickerItem item,
+        bool focused,
+        bool isSelected,
+        int nameWidth,
+        PickerMode mode)
     {
-        var name = $"{item.Skill.RelativePath} ({item.Skill.PackageId} {item.Skill.PackageVersion})";
+        var name = $"{item.Name} ({item.Package} {item.Version})";
 
         return $"{(focused ? '>' : ' ')} [{(isSelected ? 'x' : ' ')}] " +
                $"{Fit(name, nameWidth).PadRight(nameWidth)}  " +
-               Status(item, isSelected);
+               Status(item, isSelected, mode);
     }
 
     /// <summary>
@@ -295,17 +326,38 @@ internal sealed class SkillPicker(ITerminal terminal)
     /// The column used to read "new" or "installed", which classified the skill instead of
     /// telling you the consequence of the box beside it — and on a first run every row said
     /// "new", so a whole column carried nothing. A row that changes nothing now says nothing.
+    ///
+    /// Uninstalling, every row is installed and a tick means delete, so the only thing worth
+    /// saying is which ones are going.
     /// </remarks>
-    private static string Status(SkillPickerItem item, bool isSelected) => (item.Installed, isSelected) switch
+    private static string Status(SkillPickerItem item, bool isSelected, PickerMode mode)
     {
-        (false, true) => WillInstallLabel,
-        (true, false) => WillRemoveLabel,
-        (true, true) => InstalledLabel,
-        _ => string.Empty,
-    };
+        if (mode == PickerMode.Uninstall)
+        {
+            return isSelected ? WillRemoveLabel : string.Empty;
+        }
 
-    private static string Summary(IReadOnlyList<SkillPickerItem> items, HashSet<int> selected)
+        return (item.Installed, isSelected) switch
+        {
+            (false, true) => WillInstallLabel,
+            (true, false) => WillRemoveLabel,
+            (true, true) => InstalledLabel,
+            _ => string.Empty,
+        };
+    }
+
+    private static string Summary(
+        IReadOnlyList<SkillPickerItem> items,
+        HashSet<int> selected,
+        PickerMode mode)
     {
+        // Uninstalling, a tick is a removal, so "N selected" and "N to remove" would be the
+        // same number twice.
+        if (mode == PickerMode.Uninstall)
+        {
+            return $"{selected.Count} of {items.Count} to remove";
+        }
+
         var removing = items
             .Select((item, index) => (item, index))
             .Count(entry => entry.item.Installed && !selected.Contains(entry.index));
@@ -347,8 +399,7 @@ internal sealed class SkillPicker(ITerminal terminal)
     private static int MeasureNameWidth(IReadOnlyList<SkillPickerItem> items, int windowWidth)
     {
         var longest = items.Max(item =>
-            item.Skill.RelativePath.Length + item.Skill.PackageId.Length +
-            item.Skill.PackageVersion.Length + 4);
+            item.Name.Length + item.Package.Length + item.Version.Length + 4);
 
         var available = windowWidth - 1 - RowFurniture - StatusWidth;
 
@@ -366,7 +417,11 @@ internal sealed class SkillPicker(ITerminal terminal)
     /// </param>
     private sealed record Layout(int PageSize, int Pages, int NameWidth, int Width)
     {
-        public static Layout For(ITerminal terminal, IReadOnlyList<SkillPickerItem> items, string title)
+        public static Layout For(
+            ITerminal terminal,
+            IReadOnlyList<SkillPickerItem> items,
+            string title,
+            PickerMode mode)
         {
             // As many rows as the window has space for, and never more than there are skills.
             // A fixed ceiling would page a list that already fits, and padding a short list
@@ -387,13 +442,13 @@ internal sealed class SkillPicker(ITerminal terminal)
                 pages > 1 ? title.Length + 2 + $"page {pages} of {pages}".Length : title.Length,
                 BrowseHelp(items.Count, pages).Length + 2,
                 CommitHelp(items.Count).Length + 2,
-                WidestSummary(items.Count) + 2,
+                WidestSummary(items.Count, mode) + 2,
             };
 
             // Both tick states, because the status changes with the box and "will install" is
             // wider than "installed". Measuring only one leaves the other clipped.
-            content.AddRange(items.Select(item => Row(item, focused: true, isSelected: true, nameWidth).Length));
-            content.AddRange(items.Select(item => Row(item, focused: true, isSelected: false, nameWidth).Length));
+            content.AddRange(items.Select(item => Row(item, true, isSelected: true, nameWidth, mode).Length));
+            content.AddRange(items.Select(item => Row(item, true, isSelected: false, nameWidth, mode).Length));
 
             // Stay a column short of the window so a full-width line cannot wrap.
             return new Layout(pageSize, pages, nameWidth, Math.Min(content.Max(), windowWidth - 1));
@@ -403,7 +458,9 @@ internal sealed class SkillPicker(ITerminal terminal)
         /// Longest the summary can grow: every count at its maximum, with the removal clause
         /// present. Measured rather than observed, because the live summary shrinks and grows.
         /// </summary>
-        private static int WidestSummary(int itemCount) =>
-            $"{itemCount} of {itemCount} selected   {itemCount} to remove".Length;
+        private static int WidestSummary(int itemCount, PickerMode mode) =>
+            mode == PickerMode.Uninstall
+                ? $"{itemCount} of {itemCount} to remove".Length
+                : $"{itemCount} of {itemCount} selected   {itemCount} to remove".Length;
     }
 }

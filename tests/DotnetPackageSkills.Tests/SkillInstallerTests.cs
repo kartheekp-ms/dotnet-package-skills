@@ -413,6 +413,78 @@ public class SkillInstallerTests
     }
 
     [Fact]
+    public void Uninstall_removes_only_the_skills_it_was_given()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(
+            destination,
+            [
+                Skill(temp, "Mockly", "1.10.0", "mockly-usage"),
+                Skill(temp, "Mockly", "1.10.0", "mockly-setup"),
+                Skill(temp, "Contoso.Widgets", "2.3.0", "widget-usage"),
+            ],
+            dryRun: false);
+
+        // What the interactive picker hands back: an explicit list, not a package filter.
+        var removed = _installer.Uninstall(
+            destination,
+            packageId: null,
+            packageVersion: null,
+            dryRun: false,
+            only: ["mockly-setup", "widget-usage"]);
+
+        Assert.Equal(["mockly-setup", "widget-usage"], removed.Select(entry => entry.Skill));
+        Assert.True(Directory.Exists(Path.Combine(destination, "mockly-usage")));
+        Assert.False(Directory.Exists(Path.Combine(destination, "mockly-setup")));
+        Assert.Single(InstallManifest.Load(destination).EnumerateSkills());
+    }
+
+    [Fact]
+    public void Uninstall_given_an_empty_list_removes_nothing()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly")], dryRun: false);
+
+        // Confirming the picker without ticking anything must not be read as "all of them".
+        var removed = _installer.Uninstall(
+            destination,
+            packageId: null,
+            packageVersion: null,
+            dryRun: false,
+            only: []);
+
+        Assert.Empty(removed);
+        Assert.True(Directory.Exists(Path.Combine(destination, "mockly")));
+    }
+
+    [Fact]
+    public void Uninstall_combines_a_chosen_list_with_a_package_filter()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(
+            destination,
+            [
+                Skill(temp, "Mockly", "1.10.0", "mockly-usage"),
+                Skill(temp, "Contoso.Widgets", "2.3.0", "widget-usage"),
+            ],
+            dryRun: false);
+
+        var removed = _installer.Uninstall(
+            destination,
+            packageId: "Mockly",
+            packageVersion: null,
+            dryRun: false,
+            only: ["mockly-usage", "widget-usage"]);
+
+        // widget-usage was ticked but belongs to another package, so the filter still holds.
+        Assert.Equal("mockly-usage", Assert.Single(removed).Skill);
+        Assert.True(Directory.Exists(Path.Combine(destination, "widget-usage")));
+    }
+
+    [Fact]
     public void Uninstall_removes_everything_it_installed_including_the_manifest()
     {
         using var temp = new TempDirectory();

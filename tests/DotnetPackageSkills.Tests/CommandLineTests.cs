@@ -5,6 +5,21 @@ namespace DotnetPackageSkills.Tests;
 public class CommandLineTests
 {
     [Fact]
+    public void Uninstall_accepts_the_interactive_flag()
+    {
+        Assert.Empty(CommandLineBuilder.Build().Parse(["uninstall", "-i"]).Errors);
+        Assert.Empty(CommandLineBuilder.Build().Parse(["uninstall", "--interactive"]).Errors);
+    }
+
+    [Fact]
+    public void Uninstall_rejects_interactive_combined_with_json()
+    {
+        var result = CommandLineBuilder.Build().Parse(["uninstall", "--interactive", "--json"]);
+
+        Assert.Contains(result.Errors, error => error.Message.Contains("--interactive and --json"));
+    }
+
+    [Fact]
     public void Uninstall_says_it_removes_from_the_destination_rather_than_copying_into_it()
     {
         var uninstall = CommandLineBuilder.Build()

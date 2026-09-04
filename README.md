@@ -48,7 +48,7 @@ and removes what is not.
 | --- | --- |
 | `install` | Copy bundled skills into the destination. Removes stale skills no longer provided by direct dependencies, and any you turn off with `--interactive`. |
 | `list` | Show which packages ship skills, without copying anything. |
-| `uninstall` | Remove skills this tool copied in. |
+| `uninstall` | Remove skills this tool copied in. Add `--interactive` to pick them. |
 
 ### What to point it at
 
@@ -129,6 +129,32 @@ otherwise additive. Pruning is inferred from a complete package set; deselecting
 `--interactive` needs a terminal and cannot be combined with `--json`. Pair it with `--dry-run` to
 see what a selection would change before committing to it.
 
+### Choosing what to remove
+
+`uninstall` takes `--interactive` too, and lists only what this tool installed — never a skill you
+wrote yourself, because it reads the manifest rather than the folder:
+
+```bash
+dotnet package-skills uninstall --interactive
+```
+
+```
+Installed skills
+
+  move (up/down)   toggle selection (space)
+  select all (a)   clear all (c)   confirm (enter)   cancel (esc)
+
+> [x] contoso.widgets-batching (Contoso.Widgets 2.3.0)     will remove
+  [ ] contoso.widgets-conventions (Contoso.Widgets 2.3.0)
+  [ ] mockly-usage (Mockly 1.10.0)
+
+  1 of 3 to remove
+```
+
+Nothing starts ticked, so a mistaken enter removes nothing. Narrow the list first with
+`--package` if you only care about one, and add `--dry-run` to see the outcome without it
+happening.
+
 ### Options
 
 | Option | Applies to | Description |
@@ -140,6 +166,7 @@ see what a selection would change before committing to it.
 | `--no-restore` | install, list | Fail instead of restoring when the target has not been restored. |
 | `--global-packages <PATH>` | install, list | Override the NuGet global packages folder. |
 | `-i, --interactive` | install | Choose which skills to install, a page at a time. Combines with `--target` or `--package`. Not with `--json`. |
+| `-i, --interactive` | uninstall | Choose which installed skills to remove. Lists only what this tool installed. Not with `--json`. |
 | `-p, --package <ID[@VERSION]>` | uninstall | Remove only skills from this package — every version, or one. |
 | `--dry-run` | install, uninstall | Report what would change without writing anything. |
 | `--json` | all | Machine-readable output, for scripts and agents. |

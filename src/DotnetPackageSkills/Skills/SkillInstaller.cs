@@ -128,20 +128,30 @@ public sealed class SkillInstaller
     }
 
     /// <summary>
-    /// Removes skills this tool installed, optionally narrowed to one package or one exact
-    /// version of it.
+    /// Removes skills this tool installed, narrowed to one package, one exact version of it,
+    /// or an explicit set of skill names.
     /// </summary>
+    /// <param name="only">
+    /// Skill folder names to remove. Null removes everything the other filters match, which is
+    /// what an unattended uninstall does; a set is what the interactive picker returns.
+    /// </param>
     public IReadOnlyList<TrackedSkill> Uninstall(
         string destinationRoot,
         string? packageId,
         string? packageVersion,
-        bool dryRun)
+        bool dryRun,
+        IReadOnlyCollection<string>? only = null)
     {
         var manifest = InstallManifest.Load(destinationRoot);
+
+        var chosen = only is null
+            ? null
+            : new HashSet<string>(only, StringComparer.OrdinalIgnoreCase);
 
         var trackedSkills = manifest.EnumerateSkills().ToList();
         var targeted = trackedSkills
             .Where(entry => Matches(entry, packageId, packageVersion))
+            .Where(entry => chosen is null || chosen.Contains(entry.Skill))
             .OrderBy(entry => entry.Skill, StringComparer.Ordinal)
             .ToList();
 

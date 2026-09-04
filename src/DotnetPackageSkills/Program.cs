@@ -124,21 +124,49 @@ namespace DotnetPackageSkills.Cli
                 Report(parseResult, writer => writer.WriteInstallReport(result, copied: false), result);
             }));
 
+            var uninstallInteractive = new Option<bool>("--interactive", "-i")
+            {
+                Description =
+                    "Choose which installed skills to remove, one page at a time. " +
+                    "Only skills this tool installed are listed.",
+            };
+
             var uninstall = new Command("uninstall", "Remove skills this tool previously copied in.")
             {
-                uninstallDestination, uninstallPackage, dryRun, json,
+                uninstallDestination, uninstallPackage, dryRun, json, uninstallInteractive,
             };
+            uninstall.Validators.Add(result =>
+            {
+                if (result.GetResult(uninstallInteractive) is not null && result.GetResult(json) is not null)
+                {
+                    result.AddError(
+                        "--interactive and --json cannot be combined. JSON output is for scripts, " +
+                        "and a script has nobody to answer the prompt.");
+                }
+            });
             uninstall.SetAction(parseResult => Run(() =>
             {
                 var workingDirectory = Directory.GetCurrentDirectory();
                 var destinationValue = parseResult.GetValue(uninstallDestination) ?? DefaultDestination;
                 var isDryRun = parseResult.GetValue(dryRun);
                 var (id, version) = ParseUninstallFilter(parseResult.GetValue(uninstallPackage));
+                var root = Path.GetFullPath(destinationValue, workingDirectory);
+
+                IReadOnlyCollection<string>? chosen = null;
+
+                if (parseResult.GetValue(uninstallInteractive))
+                {
+                    chosen = ChooseWhatToRemove(destinationValue, workingDirectory, id, version);
+
+                    if (chosen is null)
+                    {
+                        new OutputWriter(Console.Out).WriteCancelled();
+                        return;
+                    }
+                }
 
                 var removed = new SkillInstallService(new ProcessRunner())
-                    .Uninstall(destinationValue, workingDirectory, id, version, isDryRun);
-
-                var root = Path.GetFullPath(destinationValue, workingDirectory);
+                    .Uninstall(destinationValue, workingDirectory, id, version, isDryRun, chosen);
 
                 Report(
                     parseResult,
@@ -221,12 +249,62 @@ namespace DotnetPackageSkills.Cli
             var installed = SkillInstallService.InstalledSkillNames(discovered.Destination);
 
             var items = discovered.Skills
-                .Select(skill => new SkillPickerItem(skill, installed.Contains(skill.RelativePath)))
+                .Select(skill => new SkillPickerItem(
+                    skill.RelativePath,
+                    skill.PackageId,
+                    skill.PackageVersion,
+                    installed.Contains(skill.RelativePath)))
                 .ToList();
 
-            var choice = new SkillPicker(new SystemTerminal()).Choose(items, PickerTitle(discovered));
+            var picked = new SkillPicker(new SystemTerminal()).Choose(items, PickerTitle(discovered));
 
-            return choice is null ? null : service.Install(request, discovered, choice);
+            if (picked is null)
+            {
+                return null;
+            }
+
+            // A tick keeps the skill. Anything already installed that is no longer ticked is a
+            // deliberate removal, which is not the same as a skill simply going unmentioned.
+            var choice = new SkillChoice(
+                [.. discovered.Skills.Where(skill => picked.Contains(skill.RelativePath))],
+                [.. installed.Where(name => !picked.Contains(name))]);
+
+            return service.Install(request, discovered, choice);
+        }
+
+        /// <summary>
+        /// Offers the installed skills for removal and returns the ones ticked, or null when
+        /// the user cancelled.
+        /// </summary>
+        /// <remarks>
+        /// The list comes from the manifest, so it holds exactly what this tool put there and
+        /// nothing a user wrote themselves. An empty list still returns an empty selection
+        /// rather than prompting, so the report can say there was nothing to remove.
+        /// </remarks>
+        private static IReadOnlyCollection<string>? ChooseWhatToRemove(
+            string destination,
+            string workingDirectory,
+            string? packageId,
+            string? packageVersion)
+        {
+            var installed = SkillInstallService.InstalledSkills(destination, workingDirectory)
+                .Where(entry => packageId is null ||
+                                entry.Package.Equals(packageId, StringComparison.OrdinalIgnoreCase))
+                .Where(entry => packageVersion is null || entry.Version == packageVersion)
+                .ToList();
+
+            if (installed.Count == 0)
+            {
+                return [];
+            }
+
+            var items = installed
+                .Select(entry => new SkillPickerItem(entry.Skill, entry.Package, entry.Version, Installed: true))
+                .ToList();
+
+            return new SkillPicker(new SystemTerminal())
+                .Choose(items, "Installed skills", PickerMode.Uninstall)
+                ?.ToList();
         }
 
         private static string PickerTitle(InstallResult discovered) =>

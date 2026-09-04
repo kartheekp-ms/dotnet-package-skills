@@ -117,6 +117,13 @@ a first run every row said "new", so a whole column carried nothing. It now says
 `will remove`, or `installed`, and a row that changes nothing says nothing at all. `Layout`
 measures rows in both tick states because the status changes with the box.
 
+**A tick means the opposite thing in each picker, and that is deliberate.** Installing, it keeps
+the skill, so what is already there starts ticked and pressing enter changes nothing.
+Uninstalling, it deletes, so nothing starts ticked and pressing enter still changes nothing.
+`PickerMode` carries the difference; the safe default in both is that confirming without touching
+anything is a no-op. The uninstall list comes from the manifest, so a skill someone wrote by hand
+is never offered for deletion.
+
 **The picker owns the terminal, so it has to hand it back.** `Choose` hides the cursor and takes
 Ctrl+C as input, and restores both in a `finally`. Ctrl+C is why: left to the runtime it ends the
 process mid-frame, so the restore never runs and the user is left typing into a terminal with no

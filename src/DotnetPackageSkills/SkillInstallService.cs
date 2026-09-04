@@ -202,17 +202,35 @@ public sealed class SkillInstallService(DotnetCli dotnet, SkillInstaller install
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Removes skills this tool installed, optionally limited to one package or one exact version.
+    /// Everything the manifest tracks, in the order a list should show it.
+    /// </summary>
+    /// <remarks>
+    /// This is what uninstall offers to choose from. It reads the manifest rather than the
+    /// folder, so skills the user wrote themselves are never on the list — the same reason
+    /// removal is manifest-driven in the first place.
+    /// </remarks>
+    public static IReadOnlyList<TrackedSkill> InstalledSkills(string destination, string workingDirectory) =>
+        [
+            .. InstallManifest.Load(Path.GetFullPath(destination, workingDirectory))
+                .EnumerateSkills()
+                .OrderBy(entry => entry.Skill, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(entry => entry.Skill, StringComparer.Ordinal),
+        ];
+
+    /// <summary>
+    /// Removes skills this tool installed, optionally limited to one package, one exact
+    /// version, or the names the caller chose.
     /// </summary>
     public IReadOnlyList<TrackedSkill> Uninstall(
         string destination,
         string workingDirectory,
         string? packageId,
         string? packageVersion,
-        bool dryRun)
+        bool dryRun,
+        IReadOnlyCollection<string>? only = null)
     {
         var root = Path.GetFullPath(destination, workingDirectory);
-        return installer.Uninstall(root, packageId, packageVersion, dryRun);
+        return installer.Uninstall(root, packageId, packageVersion, dryRun, only);
     }
 
     private static SkippedSkill ToSkipped(BundledSkill skill, string reason) =>

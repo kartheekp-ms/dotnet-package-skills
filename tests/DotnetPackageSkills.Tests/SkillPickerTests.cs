@@ -103,6 +103,103 @@ public class SkillPickerTests
             .Select(line => line[2..].TrimEnd()),
     ];
 
+    /// <summary>
+    /// Installed skills the user left unticked, which is what install treats as a removal.
+    /// The picker returns only what was ticked, so the caller works this out — and so does
+    /// this helper, the same way.
+    /// </summary>
+    private static List<string> Deselected(IReadOnlySet<string> chosen, params int[] installed) =>
+    [
+        .. installed
+            .Select(number => $"skill-{number:00}")
+            .Where(name => !chosen.Contains(name)),
+    ];
+
+    [Fact]
+    public void Uninstalling_starts_with_nothing_ticked()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
+
+        // Every row is installed, and a tick deletes. Pre-ticking them would make a mistaken
+        // enter wipe the lot.
+        var choice = new SkillPicker(terminal)
+            .Choose(Items(5, installed: [1, 2, 3, 4, 5]), Title, PickerMode.Uninstall);
+
+        Assert.NotNull(choice);
+        Assert.Empty(choice);
+    }
+
+    [Fact]
+    public void Uninstalling_marks_a_ticked_row_for_removal()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
+
+        var choice = new SkillPicker(terminal)
+            .Choose(Items(3, installed: [1, 2, 3]), Title, PickerMode.Uninstall);
+
+        Assert.Equal("skill-01", Assert.Single(choice!));
+        Assert.Contains("[x] skill-01 (Package.1 1.0.0)  will remove", Rows(terminal.Frames[1]));
+    }
+
+    [Fact]
+    public void Uninstalling_says_nothing_about_rows_left_alone()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(3, installed: [1, 2, 3]), Title, PickerMode.Uninstall);
+
+        // "installed" on every row would be a column saying the same thing all the way down.
+        var frame = terminal.Frames[0];
+        Assert.DoesNotContain("installed", frame);
+        Assert.DoesNotContain("will install", frame);
+        Assert.Equal("[ ] skill-01 (Package.1 1.0.0)", Rows(frame)[0]);
+    }
+
+    [Fact]
+    public void Uninstalling_counts_what_is_going_rather_than_what_is_selected()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(4, installed: [1, 2, 3, 4]), Title, PickerMode.Uninstall);
+
+        // A tick is a removal here, so "selected" and "to remove" would be one number twice.
+        Assert.Contains("0 of 4 to remove", terminal.Frames[0]);
+        Assert.Contains("1 of 4 to remove", terminal.Frames[1]);
+    }
+
+    [Fact]
+    public void Uninstalling_can_take_everything_with_one_key()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.A, ConsoleKey.Enter);
+
+        var choice = new SkillPicker(terminal)
+            .Choose(Items(24, installed: Enumerable.Range(1, 24).ToArray()), Title, PickerMode.Uninstall);
+
+        Assert.Equal(24, choice!.Count);
+    }
+
+    [Fact]
+    public void Uninstalling_cancelled_removes_nothing()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.A, ConsoleKey.Escape);
+
+        Assert.Null(new SkillPicker(terminal)
+            .Choose(Items(5, installed: [1, 2, 3, 4, 5]), Title, PickerMode.Uninstall));
+    }
+
+    [Fact]
+    public void Uninstalling_without_a_terminal_says_what_to_do_instead()
+    {
+        var terminal = new FakeTerminal { IsRedirected = true };
+
+        var error = Assert.Throws<PackageSkillsException>(
+            () => new SkillPicker(terminal).Choose(Items(3), Title, PickerMode.Uninstall));
+
+        // The install wording tells you to drop the flag and install everything, which is the
+        // opposite of what this command would then do.
+        Assert.Contains("remove every installed skill", error.Message);
+    }
+
     [Fact]
     public void Pressing_enter_immediately_keeps_exactly_what_is_installed()
     {
@@ -111,8 +208,8 @@ public class SkillPickerTests
         var choice = new SkillPicker(terminal).Choose(Items(5, installed: [2, 4]), Title);
 
         Assert.NotNull(choice);
-        Assert.Equal(["skill-02", "skill-04"], choice.Selected.Select(skill => skill.RelativePath));
-        Assert.Empty(choice.Deselected);
+        Assert.Equal(["skill-02", "skill-04"], choice);
+        Assert.Empty(Deselected(choice, 2, 4));
     }
 
     [Fact]
@@ -208,7 +305,7 @@ public class SkillPickerTests
         var choice = new SkillPicker(terminal).Choose(Items(3), Title);
 
         Assert.NotNull(choice);
-        Assert.Equal("skill-01", Assert.Single(choice.Selected).RelativePath);
+        Assert.Equal("skill-01", Assert.Single(choice));
     }
 
     [Fact]
@@ -219,8 +316,8 @@ public class SkillPickerTests
         var choice = new SkillPicker(terminal).Choose(Items(3, installed: [1]), Title);
 
         Assert.NotNull(choice);
-        Assert.Empty(choice.Selected);
-        Assert.Equal("skill-01", Assert.Single(choice.Deselected));
+        Assert.Empty(choice);
+        Assert.Equal("skill-01", Assert.Single(Deselected(choice, 1)));
     }
 
     [Fact]
@@ -231,8 +328,8 @@ public class SkillPickerTests
         var choice = new SkillPicker(terminal).Choose(Items(24), Title);
 
         Assert.NotNull(choice);
-        Assert.Equal(24, choice.Selected.Count);
-        Assert.Empty(choice.Deselected);
+        Assert.Equal(24, choice.Count);
+        Assert.Empty(Deselected(choice));
     }
 
     [Fact]
@@ -243,8 +340,8 @@ public class SkillPickerTests
         var choice = new SkillPicker(terminal).Choose(Items(24, installed: [3, 17]), Title);
 
         Assert.NotNull(choice);
-        Assert.Empty(choice.Selected);
-        Assert.Equal(["skill-03", "skill-17"], choice.Deselected);
+        Assert.Empty(choice);
+        Assert.Equal(["skill-03", "skill-17"], Deselected(choice, 3, 17));
     }
 
     [Fact]
@@ -519,9 +616,7 @@ public class SkillPickerTests
 
         new SkillPicker(terminal).Choose(
             [
-                new SkillPickerItem(
-                    new BundledSkill("Some.Package", "1.0.0", name, $"/p/{name}", name),
-                    Installed: false),
+                new SkillPickerItem(name, "Some.Package", "1.0.0", Installed: false),
             ],
             Title);
 
@@ -539,9 +634,7 @@ public class SkillPickerTests
 
         new SkillPicker(terminal).Choose(
             [
-                new SkillPickerItem(
-                    new BundledSkill("Contoso.Widgets", "2.3.0", name, $"/p/{name}", name),
-                    Installed: false),
+                new SkillPickerItem(name, "Contoso.Widgets", "2.3.0", Installed: false),
             ],
             Title);
 
@@ -557,9 +650,7 @@ public class SkillPickerTests
 
         new SkillPicker(terminal).Choose(
             [
-                new SkillPickerItem(
-                    new BundledSkill("Contoso.Widgets", "2.3.0", name, $"/p/{name}", name),
-                    Installed: false),
+                new SkillPickerItem(name, "Contoso.Widgets", "2.3.0", Installed: false),
             ],
             Title);
 
@@ -581,9 +672,7 @@ public class SkillPickerTests
 
             new SkillPicker(terminal).Choose(
                 [
-                    new SkillPickerItem(
-                        new BundledSkill("Contoso.Widgets", "2.3.0", Name, "/p", Name),
-                        Installed: true),
+                    new SkillPickerItem(Name, "Contoso.Widgets", "2.3.0", Installed: true),
                 ],
                 Title);
 
@@ -715,8 +804,8 @@ public class SkillPickerTests
         var choice = new SkillPicker(terminal).Choose(Items(1, installed: [1]), Title);
 
         Assert.NotNull(choice);
-        Assert.Empty(choice.Selected);
-        Assert.Equal("skill-01", Assert.Single(choice.Deselected));
+        Assert.Empty(choice);
+        Assert.Equal("skill-01", Assert.Single(Deselected(choice, 1)));
     }
 
     [Fact]
@@ -799,7 +888,7 @@ public class SkillPickerTests
         var choice = new SkillPicker(terminal).Choose([], Title);
 
         Assert.NotNull(choice);
-        Assert.Empty(choice.Selected);
+        Assert.Empty(choice);
         Assert.Empty(terminal.Frames);
     }
 
@@ -809,14 +898,7 @@ public class SkillPickerTests
         {
             var name = $"skill-{number:00}";
 
-            return new SkillPickerItem(
-                new BundledSkill(
-                    $"Package.{number}",
-                    "1.0.0",
-                    name,
-                    $"/packages/package.{number}/1.0.0/skills/{name}",
-                    name),
-                installed.Contains(number));
+            return new SkillPickerItem(name, $"Package.{number}", "1.0.0", installed.Contains(number));
         }),
     ];
 }
