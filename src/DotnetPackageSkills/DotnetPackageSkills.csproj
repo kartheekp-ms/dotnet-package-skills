@@ -26,6 +26,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="SharpYaml" Version="3.13.1" />
     <PackageReference Include="System.CommandLine" Version="2.0.10" />
   </ItemGroup>
 

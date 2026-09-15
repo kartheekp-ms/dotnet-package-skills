@@ -83,25 +83,29 @@ It composes with `--target` and `--package`, so you can narrow to a single packa
 pick among the skills it ships — which is what you want when one package bundles a dozen of them.
 
 ```
-Skills for MyApp.slnx  page 1 of 3
+Which skills should be installed? (MyApp.slnx)  page 1 of 3
 
-  move (up/down)   change page (left/right)   toggle selection (space)
-  select all (a)   clear all (c)   confirm (enter)   cancel (esc)
+> [x] mockly-setup - Configure mocks and test
+      doubles for unit tests.
+  [ ] mockly-usage - Common Mockly usage patterns.
 
-> [x] contoso.widgets-usage (Contoso.Widgets 2.3.0)      will install
-  [ ] contoso.widgets-testing (Contoso.Widgets 2.3.0)
-  [x] mockly-usage (Mockly 1.10.0)                       installed
-  [ ] mockly-setup (Mockly 1.10.0)                       will remove
-
-  2 of 24 selected   1 to remove
+1 of 24 selected; 1 to install; 0 to remove
+(Press <space> to select, <enter> to accept)
 ```
 
-The right-hand column is what confirming would *do*, not what the skill is. A row you have not
-touched changes nothing, so it says nothing. Tick a new skill and it reads `will install`; untick
-one you already have and it reads `will remove`, until you tick it back.
+Each description follows the authored skill name immediately after ` - `, without a padded
+column or a package/version suffix. Package prefixes in authored names are kept, and continuation
+lines flow beneath the skill text, using the available width rather than leaving a name-sized gap.
+The highlighted `>` is blue; skill names and checkboxes
+are green for a pending installation, red for a pending removal, and their normal color when nothing changes. Descriptions
+stay neutral so they are easy to read. The summary counts pending actions; there is no separate
+status column. With `NO_COLOR` set, or on a terminal without color support, compact `+` and `-`
+markers indicate installation and removal instead.
 
-The legend names the action first and the key second, and lists only what applies — a single
-page drops "change page", a single skill drops the rest. These all work:
+The keyboard hints appear below the list, using Aspire's
+`(Press <space> to select, <enter> to accept)` style. Every keyboard-help line starts with `Press`,
+including movement, paging, select-all, clear-all, cancel, and description scrolling. Controls
+that do nothing are left out. These keys work:
 
 | Key | Does |
 | --- | --- |
@@ -110,15 +114,22 @@ page drops "change page", a single skill drops the rest. These all work:
 | `home` / `end` | Jump to the first / last skill |
 | `space` | Toggle the highlighted skill |
 | `a` / `c` | Select all / clear all, across every page |
+| `ctrl+up` / `ctrl+down` | Scroll a description when one skill is taller than a page |
 | `enter` | Confirm the selection |
 | `esc` / `q` / `ctrl+c` | Cancel, changing nothing |
 
-The frame is sized to what it holds. A page is as tall as your terminal allows, so a list that
-fits shows all at once and never mentions pages at all — and when it does page, a list long enough
-to scroll off the top is a list nobody reads before agreeing to it. A repository with one skill
-gets a four-line prompt, not a screenful of blank rows, and a last page with two skills ends after
-the second. Keys that would do nothing are left out: no page counter when there is only one page,
-no movement or select-all keys when there is only one skill.
+Pages are measured in rendered lines, including wrapped descriptions and keyboard hints, rather
+than a fixed number of skills. Each ordinary skill stays together on one page. A description too
+long for a page can be scrolled without changing the selection. Resizing the terminal reflows the
+page in place while preserving the highlighted skill and checked items, even during a redraw.
+Old picker frames are not pushed into scrollback. When scrolling an oversized description, the
+skill row stays visible while its continuation lines scroll. Short lists and partial final pages
+do not leave a screenful of blank rows, and a single page has no page counter.
+
+Descriptions come from the top-level YAML `description` in each package's `SKILL.md`. Missing
+descriptions say `No description provided.`; unreadable or malformed metadata shows an explicit
+description warning without hiding the skill or preventing its selection. Only interactive
+pickers read this metadata: regular reports, JSON output, and the ownership manifest are unchanged.
 
 Skills you already have start selected, so pressing enter straight away changes
 nothing and a new skill is always an explicit opt-in.
@@ -139,21 +150,20 @@ dotnet package-skills uninstall --interactive
 ```
 
 ```
-Installed skills
+Which skills should be uninstalled?
 
-  move (up/down)   toggle selection (space)
-  select all (a)   clear all (c)   confirm (enter)   cancel (esc)
+> [x] mockly-setup - Configure mocks and test
+      doubles for unit tests.
+  [ ] mockly-usage - Common Mockly usage patterns.
 
-> [x] contoso.widgets-batching (Contoso.Widgets 2.3.0)     will remove
-  [ ] contoso.widgets-conventions (Contoso.Widgets 2.3.0)
-  [ ] mockly-usage (Mockly 1.10.0)
-
-  1 of 3 to remove
+1 of 2 to remove
+(Press <space> to select, <enter> to accept)
 ```
 
 Nothing starts ticked, so a mistaken enter removes nothing. Narrow the list first with
 `--package` if you only care about one, and add `--dry-run` to see the outcome without it
-happening.
+happening. Descriptions are read from the installed copies, not from the NuGet cache. A missing
+or damaged `SKILL.md` does not prevent removal of a manifest-owned skill.
 
 ### Options
 
@@ -165,8 +175,8 @@ happening.
 | `-d, --destination <PATH>` | uninstall | Where to remove them from. Must match the one you installed to. |
 | `--no-restore` | install, list | Fail instead of restoring when the target has not been restored. |
 | `--global-packages <PATH>` | install, list | Override the NuGet global packages folder. |
-| `-i, --interactive` | install | Choose which skills to install, a page at a time. Combines with `--target` or `--package`. Not with `--json`. |
-| `-i, --interactive` | uninstall | Choose which installed skills to remove. Lists only what this tool installed. Not with `--json`. |
+| `-i, --interactive` | install | Choose which skills to install, with descriptions and pagination. Combines with `--target` or `--package`. Not with `--json`. |
+| `-i, --interactive` | uninstall | Choose which installed skills to remove, with descriptions and pagination. Lists only what this tool installed. Not with `--json`. |
 | `-p, --package <ID[@VERSION]>` | uninstall | Remove only skills from this package — every version, or one. |
 | `--dry-run` | install, uninstall | Report what would change without writing anything. |
 | `--json` | all | One JSON object on stdout instead of the report. See [Scripting it](#scripting-it). |
@@ -330,6 +340,25 @@ A complete working example is in [`samples/Contoso.Widgets`](samples/Contoso.Wid
 
 Every skill must have its own immediate subdirectory under `skills/`; a lone `skills/SKILL.md` is
 not discovered.
+
+Give each skill a useful `description` in its YAML frontmatter so customers can decide whether
+they need it:
+
+```yaml
+---
+name: contoso.widgets-widget-usage
+description: >
+  Correct usage patterns for Contoso.Widgets, including lifetime rules and batching.
+  Use when creating, configuring, or disposing a Widget.
+---
+```
+
+Plain, quoted, literal (`|`), and folded (`>`) descriptions are supported. The interactive picker
+reads only bounded frontmatter, never interprets the Markdown instructions, and never rewrites
+the file. Description metadata is informative, not an additional installation requirement.
+Frontmatter is limited to 65,536 decoded characters and 32 collection levels. Explicit YAML tags,
+anchors, and aliases are not supported by the description reader; they produce a visible metadata
+warning rather than preventing installation.
 
 ## How it works
 

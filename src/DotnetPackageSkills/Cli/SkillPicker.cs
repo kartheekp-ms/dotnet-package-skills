@@ -1,113 +1,25 @@
 namespace DotnetPackageSkills.Cli;
 
-/// <summary>Whether the picker is choosing what to add or what to take away.</summary>
-/// <remarks>
-/// It changes what a tick means, and so what the row says next to it. Installing, a tick keeps
-/// the skill and the interesting rows are the ones you changed. Uninstalling, a tick marks the
-/// skill for removal, and nothing starts ticked because pressing enter by mistake should not
-/// delete anything.
-/// </remarks>
 internal enum PickerMode
 {
     Install,
     Uninstall,
 }
 
-/// <summary>One row in the picker.</summary>
-/// <param name="Name">Skill folder name, which is also its name in the destination.</param>
-/// <param name="Installed">Whether it is in the destination already.</param>
-internal sealed record SkillPickerItem(string Name, string Package, string Version, bool Installed);
+/// <summary>Picker metadata supplied by the caller, never loaded by the UI.</summary>
+internal sealed record SkillPickerItem(
+    string Name,
+    string Package,
+    string Version,
+    bool Installed,
+    string? Description = null,
+    string? DescriptionWarning = null);
 
-/// <summary>
-/// Lets the user choose which skills to act on, a page at a time.
-/// </summary>
-/// <remarks>
-/// Paging is not decoration. A solution can reference many packages that ship skills, and a list
-/// long enough to scroll off the top is a list nobody reads before agreeing to it. The frame
-/// fits the window and redraws in place, so only one page is ever on screen.
-/// </remarks>
+/// <summary>A paged checklist whose ticks mean keep/install, or explicitly remove in uninstall mode.</summary>
 internal sealed class SkillPicker(ITerminal terminal)
 {
+    private static readonly TimeSpan InputPollInterval = TimeSpan.FromMilliseconds(100);
 
-    /// <summary>Frame rows that are not skills: title, help, status, and their blank separators.</summary>
-    private const int ChromeRows = 7;
-
-    /// <summary>
-    /// Columns a skill row spends on everything except the name and the status: the cursor and
-    /// checkbox that open it, and the gap before the status.
-    /// </summary>
-    private const int RowFurniture = 6 + 2;
-
-    /// <summary>
-    /// Narrowest the name column is allowed to get before it stops giving ground to the
-    /// package column. Below this a truncated name says nothing useful.
-    /// </summary>
-    private const int MinNameWidth = 12;
-
-    private const string InstalledLabel = "installed";
-    private const string WillInstallLabel = "will install";
-    private const string WillRemoveLabel = "will remove";
-
-    /// <summary>Widest any status can be, so the column is one width for every row.</summary>
-    private static readonly int StatusWidth =
-        new[] { InstalledLabel, WillInstallLabel, WillRemoveLabel }.Max(label => label.Length);
-
-    /// <summary>
-    /// Legend for browsing: what you do while looking around, then the key that does it.
-    /// </summary>
-    /// <remarks>
-    /// Action first, key in brackets. "space toggle" reads as jargon to anyone who has not
-    /// already been told what it means, whereas "toggle selection (space)" answers the
-    /// question the reader is actually asking, which is what they can do here.
-    ///
-    /// Built from the keys that do something: offering "change page" on a single page, or
-    /// "move" on a single skill, teaches a control that does nothing when they try it.
-    ///
-    /// Deliberately ASCII. Windows consoles default to an OEM code page that silently drops
-    /// arrows and box-drawing glyphs, so a prettier legend renders as gaps on exactly the
-    /// terminal most users are on.
-    /// </remarks>
-    private static string BrowseHelp(int itemCount, int pages)
-    {
-        var entries = new List<string>(3);
-
-        if (itemCount > 1)
-        {
-            entries.Add("move (up/down)");
-        }
-
-        if (pages > 1)
-        {
-            entries.Add("change page (left/right)");
-        }
-
-        entries.Add("toggle selection (space)");
-
-        return string.Join("   ", entries);
-    }
-
-    /// <summary>Legend for the rest: acting on everything at once, and leaving.</summary>
-    private static string CommitHelp(int itemCount)
-    {
-        var entries = new List<string>(4);
-
-        // With one skill, "select all" and "clear all" are just a slower way to press space.
-        if (itemCount > 1)
-        {
-            entries.Add("select all (a)");
-            entries.Add("clear all (c)");
-        }
-
-        entries.Add("confirm (enter)");
-        entries.Add("cancel (esc)");
-
-        return string.Join("   ", entries);
-    }
-
-    /// <summary>
-    /// Runs the picker. Returns the names the user ticked, or null when they cancelled, in
-    /// which case nothing should be written to the destination.
-    /// </summary>
     public IReadOnlySet<string>? Choose(
         IReadOnlyList<SkillPickerItem> items,
         string title,
@@ -130,64 +42,91 @@ internal sealed class SkillPicker(ITerminal terminal)
                       "mean with --package.");
         }
 
-        // Installing, what is already there starts ticked so pressing enter changes nothing.
-        // Uninstalling, a tick means "delete this", so nothing starts ticked for the same reason.
+        // Accepting without making a choice never adds or removes anything.
         var selected = new HashSet<int>(
             mode == PickerMode.Install
                 ? items.Select((item, index) => (item, index))
-                    .Where(entry => entry.item.Installed)
-                    .Select(entry => entry.index)
+                    .Where(entry => entry.item.Installed).Select(entry => entry.index)
                 : []);
-
-        var layout = Layout.For(terminal, items, title, mode);
+        var layout = Measure();
         var cursor = 0;
-
-        terminal.CursorVisible = false;
-
-        // Take Ctrl+C as a key so it cancels through the same path as esc. Left to the
-        // runtime it kills the process mid-frame, skipping the restore below and leaving
-        // the user with a hidden cursor.
-        terminal.TreatControlCAsInput = true;
+        int? pageOffset = null;
+        var scroll = new int[items.Count];
+        var frameTop = 0;
+        var height = 0;
+        var frameStarted = false;
+        var resetViewport = false;
+        var original = terminal.CaptureState();
 
         try
         {
-            // Scroll once up front so the frame's top row stays put for every later redraw.
-            var frameTop = Reserve(layout.PageSize + ChromeRows);
-            var height = 0;
+            terminal.UseUtf8Output();
+            terminal.CursorVisible = false;
+            terminal.TreatControlCAsInput = true;
+            terminal.ResetStyle();
+            frameStarted = true;
+            frameTop = Reserve(layout.MaxFrameHeight);
 
             while (true)
             {
-                height = Render(items, selected, cursor, layout, title, frameTop, mode);
-
-                var key = terminal.ReadKey();
-
-                // 'c' clears the selection, so the modifier has to be tested before the
-                // switch below reaches that case.
-                if (key.Key == ConsoleKey.C && (key.Modifiers & ConsoleModifiers.Control) != 0)
+                Reflow();
+                DrawFrame();
+                ConsoleKeyInfo key;
+                while (!terminal.TryReadKey(InputPollInterval, out key))
                 {
-                    Close(frameTop + height);
-                    return null;
+                    if (Reflow())
+                    {
+                        DrawFrame();
+                    }
+                }
+
+                // A key can arrive after a resize. Page keys must use the new boundaries,
+                // and accept/cancel must not leave the old, differently sized frame behind.
+                if (Reflow())
+                {
+                    DrawFrame();
+                }
+
+                if ((key.Modifiers & ConsoleModifiers.Control) != 0)
+                {
+                    if (key.Key == ConsoleKey.C)
+                    {
+                        return null;
+                    }
+
+                    if (key.Key is ConsoleKey.UpArrow or ConsoleKey.DownArrow)
+                    {
+                        scroll[cursor] = Math.Clamp(
+                            scroll[cursor] + (key.Key == ConsoleKey.UpArrow ? -1 : 1),
+                            0,
+                            layout.MaxScroll(cursor));
+                        continue;
+                    }
                 }
 
                 switch (key.Key)
                 {
                     case ConsoleKey.UpArrow:
                         cursor = (cursor - 1 + items.Count) % items.Count;
+                        pageOffset = null;
                         break;
                     case ConsoleKey.DownArrow:
                         cursor = (cursor + 1) % items.Count;
+                        pageOffset = null;
                         break;
                     case ConsoleKey.LeftArrow or ConsoleKey.PageUp:
-                        cursor = Math.Max(0, cursor - layout.PageSize);
+                        MovePage(-1);
                         break;
                     case ConsoleKey.RightArrow or ConsoleKey.PageDown:
-                        cursor = Math.Min(items.Count - 1, cursor + layout.PageSize);
+                        MovePage(1);
                         break;
                     case ConsoleKey.Home:
                         cursor = 0;
+                        pageOffset = null;
                         break;
                     case ConsoleKey.End:
                         cursor = items.Count - 1;
+                        pageOffset = null;
                         break;
                     case ConsoleKey.Spacebar:
                         if (!selected.Add(cursor))
@@ -203,35 +142,115 @@ internal sealed class SkillPicker(ITerminal terminal)
                         selected.Clear();
                         break;
                     case ConsoleKey.Enter:
-                        height = Render(items, selected, cursor, layout, title, frameTop, mode);
-                        Close(frameTop + height);
-                        return Result(items, selected);
+                        return items.Where((_, index) => selected.Contains(index))
+                            .Select(item => item.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
                     case ConsoleKey.Escape or ConsoleKey.Q:
-                        Close(frameTop + height);
                         return null;
                 }
             }
         }
         finally
         {
-            terminal.CursorVisible = true;
-            terminal.TreatControlCAsInput = false;
+            try
+            {
+                try
+                {
+                    terminal.ResetStyle();
+                }
+                finally
+                {
+                    if (frameStarted)
+                    {
+                        var bottom = Math.Clamp(frameTop + height, 0, terminal.WindowHeight - 1);
+                        terminal.SetCursorPosition(0, bottom);
+                        if (bottom < terminal.WindowHeight - 1)
+                        {
+                            terminal.WriteLine();
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                terminal.RestoreState(original);
+            }
+        }
+
+        PickerLayout Measure()
+        {
+            var size = terminal.GetWindowSize();
+            return PickerLayout.For(items, title, mode, size.Width, size.Height, terminal.SupportsColor);
+        }
+
+        void DrawFrame()
+        {
+            while (true)
+            {
+                Reflow();
+                var previousHeight = height;
+                try
+                {
+                    if (resetViewport)
+                    {
+                        terminal.ResetStyle();
+                        terminal.ClearViewport();
+                        frameTop = 0;
+                        height = 0;
+                        resetViewport = false;
+                    }
+
+                    Render(items, selected, cursor, scroll, layout, frameTop, mode, ref height);
+                    EnsureViewport(layout);
+                    return;
+                }
+                catch (Exception ex) when (ex is ViewportChangedException ||
+                    (ex is IOException or ArgumentOutOfRangeException or InvalidOperationException) && ViewportChanged(layout))
+                {
+                    height = Math.Max(previousHeight, height);
+                    resetViewport = true;
+                }
+                catch
+                {
+                    // A failed redraw can leave the lower part of the previous frame intact.
+                    height = Math.Max(previousHeight, height);
+                    throw;
+                }
+            }
+        }
+
+        bool Reflow()
+        {
+            if (!ViewportChanged(layout))
+            {
+                return false;
+            }
+
+            layout = Measure();
+            resetViewport = true;
+            pageOffset = null;
+            for (var item = 0; item < scroll.Length; item++)
+            {
+                scroll[item] = Math.Min(scroll[item], layout.MaxScroll(item));
+            }
+
+            return true;
+        }
+
+        void MovePage(int direction)
+        {
+            var page = layout.PageIndexFor(cursor);
+            var target = Math.Clamp(page + direction, 0, layout.Pages.Count - 1);
+            if (target == page)
+            {
+                return;
+            }
+
+            pageOffset ??= cursor - layout.Pages[page].First;
+            var next = layout.Pages[target];
+            cursor = next.First + Math.Min(pageOffset.Value, next.Count - 1);
         }
     }
 
-    /// <summary>
-    /// The names ticked when the user confirmed. What that means is the caller's business:
-    /// installing it is what to keep, uninstalling it is what to delete.
-    /// </summary>
-    private static IReadOnlySet<string> Result(IReadOnlyList<SkillPickerItem> items, HashSet<int> selected) =>
-        items.Where((_, index) => selected.Contains(index))
-            .Select(item => item.Name)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// Writes the frame's worth of blank lines so any scrolling happens before the first render,
-    /// and reports the row the frame now starts on.
-    /// </summary>
     private int Reserve(int height)
     {
         for (var row = 0; row < height; row++)
@@ -242,225 +261,138 @@ internal sealed class SkillPicker(ITerminal terminal)
         return Math.Max(0, terminal.CursorTop - height);
     }
 
-    private void Close(int bottom)
-    {
-        terminal.SetCursorPosition(0, bottom);
-        terminal.WriteLine();
-    }
-
-    /// <summary>Draws one frame at <paramref name="frameTop"/> and reports how many rows it used.</summary>
-    /// <remarks>
-    /// A partial last page draws only the skills it has, so the summary follows the final skill
-    /// instead of a run of blanks. Rows an earlier, taller frame wrote below this one are then
-    /// blanked, because in-place redrawing can only erase by overwriting.
-    /// </remarks>
-    private int Render(
+    private void Render(
         IReadOnlyList<SkillPickerItem> items,
         HashSet<int> selected,
         int cursor,
-        Layout layout,
-        string title,
+        int[] scroll,
+        PickerLayout layout,
         int frameTop,
-        PickerMode mode)
+        PickerMode mode,
+        ref int height)
     {
-        var page = cursor / layout.PageSize;
-        var first = page * layout.PageSize;
-        var rows = Math.Min(layout.PageSize, items.Count - first);
-        var width = layout.Width;
-
-        terminal.SetCursorPosition(0, frameTop);
-
-        // A lone page has no "other" page to be on, so the counter is noise.
-        WriteRow(
-            layout.Pages > 1 ? Spread(title, $"page {page + 1} of {layout.Pages}", width) : title,
-            width);
-        WriteRow(string.Empty, width);
-        WriteRow($"  {BrowseHelp(items.Count, layout.Pages)}", width);
-        WriteRow($"  {CommitHelp(items.Count)}", width);
-        WriteRow(string.Empty, width);
-
-        for (var row = 0; row < rows; row++)
+        var previousHeight = height;
+        height = 0;
+        var pageIndex = layout.PageIndexFor(cursor);
+        var page = layout.Pages[pageIndex];
+        foreach (var line in layout.Header(pageIndex))
         {
-            var index = first + row;
-            WriteRow(
-                Row(items[index], index == cursor, selected.Contains(index), layout.NameWidth, mode),
-                width);
+            WriteRow(layout, frameTop, ref height, new Span(line));
         }
 
-        WriteRow(string.Empty, width);
-        WriteRow($"  {Summary(items, selected, mode)}", width);
-
-        var height = ChromeRows + rows;
-
-        for (var row = height; row < layout.PageSize + ChromeRows; row++)
+        WriteRow(layout, frameTop, ref height);
+        for (var index = page.First; index < page.First + page.Count; index++)
         {
-            WriteRow(string.Empty, width);
-        }
-
-        // Park just below the content. Anything that ends the process without unwinding —
-        // Ctrl+C on a host that will not hand it to us — then leaves the shell prompt against
-        // the summary rather than at the bottom of the rows this frame reserved.
-        terminal.SetCursorPosition(0, frameTop + height);
-
-        return height;
-    }
-
-    private static string Row(
-        SkillPickerItem item,
-        bool focused,
-        bool isSelected,
-        int nameWidth,
-        PickerMode mode)
-    {
-        var name = $"{item.Name} ({item.Package} {item.Version})";
-
-        return $"{(focused ? '>' : ' ')} [{(isSelected ? 'x' : ' ')}] " +
-               $"{Fit(name, nameWidth).PadRight(nameWidth)}  " +
-               Status(item, isSelected, mode);
-    }
-
-    /// <summary>
-    /// What confirming would do to this row, rather than what it is.
-    /// </summary>
-    /// <remarks>
-    /// The column used to read "new" or "installed", which classified the skill instead of
-    /// telling you the consequence of the box beside it — and on a first run every row said
-    /// "new", so a whole column carried nothing. A row that changes nothing now says nothing.
-    ///
-    /// Uninstalling, every row is installed and a tick means delete, so the only thing worth
-    /// saying is which ones are going.
-    /// </remarks>
-    private static string Status(SkillPickerItem item, bool isSelected, PickerMode mode)
-    {
-        if (mode == PickerMode.Uninstall)
-        {
-            return isSelected ? WillRemoveLabel : string.Empty;
-        }
-
-        return (item.Installed, isSelected) switch
-        {
-            (false, true) => WillInstallLabel,
-            (true, false) => WillRemoveLabel,
-            (true, true) => InstalledLabel,
-            _ => string.Empty,
-        };
-    }
-
-    private static string Summary(
-        IReadOnlyList<SkillPickerItem> items,
-        HashSet<int> selected,
-        PickerMode mode)
-    {
-        // Uninstalling, a tick is a removal, so "N selected" and "N to remove" would be the
-        // same number twice.
-        if (mode == PickerMode.Uninstall)
-        {
-            return $"{selected.Count} of {items.Count} to remove";
-        }
-
-        var removing = items
-            .Select((item, index) => (item, index))
-            .Count(entry => entry.item.Installed && !selected.Contains(entry.index));
-
-        var summary = $"{selected.Count} of {items.Count} selected";
-
-        return removing == 0 ? summary : $"{summary}   {removing} to remove";
-    }
-
-    /// <summary>
-    /// Pads a row to the frame width, which erases whatever the previous frame left on that
-    /// line. The width is content-derived and always narrower than the window, so this never
-    /// triggers the automatic wrap a full-width line causes.
-    /// </summary>
-    private void WriteRow(string text, int width) => terminal.WriteLine(Fit(text, width).PadRight(width));
-
-    private static string Spread(string left, string right, int width)
-    {
-        var gap = width - left.Length - right.Length;
-        return gap > 1 ? $"{left}{new string(' ', gap)}{right}" : $"{left}  {right}";
-    }
-
-    private static string Fit(string text, int width) => width switch
-    {
-        <= 0 => string.Empty,
-        _ when text.Length <= width => text,
-        <= 3 => text[..width],
-        _ => text[..(width - 3)] + "...",
-    };
-
-    /// <summary>
-    /// Width of the name column, which carries the skill and the package it came from: as wide
-    /// as the longest of those, unless the terminal is too narrow to hold it beside the status.
-    /// </summary>
-    /// <remarks>
-    /// This used to be capped at a constant, so a long name lost its tail even on a
-    /// two-hundred-column window. The only real limit is the window.
-    /// </remarks>
-    private static int MeasureNameWidth(IReadOnlyList<SkillPickerItem> items, int windowWidth)
-    {
-        var longest = items.Max(item =>
-            item.Name.Length + item.Package.Length + item.Version.Length + 4);
-
-        var available = windowWidth - 1 - RowFurniture - StatusWidth;
-
-        return Math.Min(longest, Math.Max(MinNameWidth, available));
-    }
-
-    /// <summary>Frame dimensions, measured once so every redraw lands on the same grid.</summary>
-    /// <param name="PageSize">Skill rows shown at once.</param>
-    /// <param name="Pages">Total pages, which decides whether paging chrome is worth showing.</param>
-    /// <param name="NameWidth">Width of the skill-name column.</param>
-    /// <param name="Width">
-    /// Width every row is padded to. Derived from the content rather than the window, so the
-    /// page counter sits beside the title instead of stranded at the far edge of a wide
-    /// terminal, and no row trails padding past the text it belongs to.
-    /// </param>
-    private sealed record Layout(int PageSize, int Pages, int NameWidth, int Width)
-    {
-        public static Layout For(
-            ITerminal terminal,
-            IReadOnlyList<SkillPickerItem> items,
-            string title,
-            PickerMode mode)
-        {
-            // As many rows as the window has space for, and never more than there are skills.
-            // A fixed ceiling would page a list that already fits, and padding a short list
-            // out to a full page is what left a single skill stranded above blank lines.
-            var pageSize = Math.Clamp(
-                terminal.WindowHeight - ChromeRows - 1,
-                1,
-                items.Count);
-
-            var pages = (items.Count + pageSize - 1) / pageSize;
-            var windowWidth = Math.Max(20, terminal.WindowWidth);
-            var nameWidth = MeasureNameWidth(items, windowWidth);
-
-            // Measure the widest line any frame could produce. Anything narrower would leave
-            // characters from a previous frame behind when a later one is shorter.
-            var content = new List<int>
+            var entry = layout.Entries[index];
+            var action = ActionStyle(items[index], selected.Contains(index), mode);
+            var offset = page.Scrollable ? scroll[index] : 0;
+            var rows = page.Scrollable ? page.VisibleRows : entry.Height;
+            var marker = action switch
             {
-                pages > 1 ? title.Length + 2 + $"page {pages} of {pages}".Length : title.Length,
-                BrowseHelp(items.Count, pages).Length + 2,
-                CommitHelp(items.Count).Length + 2,
-                WidestSummary(items.Count, mode) + 2,
+                TerminalStyle.Install => '+',
+                TerminalStyle.Remove => '-',
+                _ => ' ',
+            };
+            // Continuations are wider than the space after the name, so scroll them below
+            // the fixed skill row rather than placing one into its narrower first-line slot.
+            WriteRow(
+                layout, frameTop, ref height,
+                new Span(index == cursor ? ">" : " ", index == cursor ? TerminalStyle.Focus : TerminalStyle.Default),
+                new Span(layout.SupportsColor ? " " : $" {marker} "),
+                new Span($"[{(selected.Contains(index) ? 'x' : ' ')}] {entry.Label}", action),
+                new Span($" - {entry.Description[0]}"));
+            for (var line = 1; line < rows; line++)
+            {
+                WriteRow(layout, frameTop, ref height,
+                    new Span(new string(' ', layout.ContinuationColumn) + entry.Description[offset + line]));
+            }
+        }
+
+        WriteRow(layout, frameTop, ref height);
+        var installing = items.Where((item, index) => !item.Installed && selected.Contains(index)).Count();
+        var removing = mode == PickerMode.Uninstall
+            ? selected.Count
+            : items.Where((item, index) => item.Installed && !selected.Contains(index)).Count();
+        foreach (var line in TerminalText.Wrap(
+                     PickerLayout.Summary(selected.Count, items.Count, installing, removing, mode), layout.Width))
+        {
+            WriteRow(layout, frameTop, ref height, new Span(line));
+        }
+
+        foreach (var line in layout.Help)
+        {
+            WriteRow(layout, frameTop, ref height, new Span(line, TerminalStyle.Muted));
+        }
+
+        if (page.Scrollable)
+        {
+            foreach (var line in TerminalText.Wrap(
+                         PickerLayout.ScrollHelp(scroll[cursor] + 2, scroll[cursor] + page.VisibleRows,
+                             layout.Entries[cursor].Height),
+                         layout.Width))
+            {
+                WriteRow(layout, frameTop, ref height, new Span(line, TerminalStyle.Muted));
+            }
+        }
+
+        // Erase old content, but park at the actual footer, not at the end of the erased
+        // rectangle. A short final page should not strand the eventual shell prompt.
+        var erased = height;
+        while (erased < previousHeight)
+        {
+            WriteRow(layout, frameTop, ref erased);
+        }
+
+        terminal.SetCursorPosition(0, frameTop + height);
+    }
+
+    private void WriteRow(PickerLayout layout, int frameTop, ref int height, params Span[] spans)
+    {
+        EnsureViewport(layout);
+        var row = height++;
+        terminal.SetCursorPosition(0, frameTop + row);
+        var cells = 0;
+        foreach (var span in spans)
+        {
+            terminal.SetStyle(layout.SupportsColor ? span.Style : TerminalStyle.Default);
+            EnsureViewport(layout);
+            terminal.Write(span.Text);
+            EnsureViewport(layout);
+            cells += TerminalText.Width(span.Text);
+        }
+
+        terminal.ResetStyle();
+        EnsureViewport(layout);
+        terminal.Write(new string(' ', layout.Width - cells));
+        EnsureViewport(layout);
+    }
+
+    private bool ViewportChanged(PickerLayout layout)
+    {
+        var size = terminal.GetWindowSize();
+        return layout.WindowWidth != size.Width || layout.WindowHeight != size.Height ||
+               layout.SupportsColor != terminal.SupportsColor;
+    }
+
+    private void EnsureViewport(PickerLayout layout)
+    {
+        if (ViewportChanged(layout))
+        {
+            throw new ViewportChangedException();
+        }
+    }
+
+    private static TerminalStyle ActionStyle(SkillPickerItem item, bool selected, PickerMode mode) =>
+        mode == PickerMode.Uninstall
+            ? selected ? TerminalStyle.Remove : TerminalStyle.Default
+            : (item.Installed, selected) switch
+            {
+                (false, true) => TerminalStyle.Install,
+                (true, false) => TerminalStyle.Remove,
+                _ => TerminalStyle.Default,
             };
 
-            // Both tick states, because the status changes with the box and "will install" is
-            // wider than "installed". Measuring only one leaves the other clipped.
-            content.AddRange(items.Select(item => Row(item, true, isSelected: true, nameWidth, mode).Length));
-            content.AddRange(items.Select(item => Row(item, true, isSelected: false, nameWidth, mode).Length));
+    private readonly record struct Span(string Text, TerminalStyle Style = TerminalStyle.Default);
 
-            // Stay a column short of the window so a full-width line cannot wrap.
-            return new Layout(pageSize, pages, nameWidth, Math.Min(content.Max(), windowWidth - 1));
-        }
-
-        /// <summary>
-        /// Longest the summary can grow: every count at its maximum, with the removal clause
-        /// present. Measured rather than observed, because the live summary shrinks and grows.
-        /// </summary>
-        private static int WidestSummary(int itemCount, PickerMode mode) =>
-            mode == PickerMode.Uninstall
-                ? $"{itemCount} of {itemCount} to remove".Length
-                : $"{itemCount} of {itemCount} selected   {itemCount} to remove".Length;
-    }
+    private sealed class ViewportChangedException : Exception;
 }

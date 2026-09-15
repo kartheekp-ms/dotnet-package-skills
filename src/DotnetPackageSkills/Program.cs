@@ -66,7 +66,7 @@ namespace DotnetPackageSkills.Cli
             var interactive = new Option<bool>("--interactive", "-i")
             {
                 Description =
-                    "Choose which discovered skills to install, one page at a time. Skills already " +
+                    "Choose which discovered skills to install, with descriptions, one page at a time. Skills already " +
                     "installed start selected; turning one off removes it.",
             };
 
@@ -133,7 +133,7 @@ namespace DotnetPackageSkills.Cli
             var uninstallInteractive = new Option<bool>("--interactive", "-i")
             {
                 Description =
-                    "Choose which installed skills to remove, one page at a time. " +
+                    "Choose which installed skills to remove, with descriptions, one page at a time. " +
                     "Only skills this tool installed are listed.",
             };
 
@@ -254,13 +254,7 @@ namespace DotnetPackageSkills.Cli
 
             var installed = SkillInstallService.InstalledSkillNames(discovered.Destination);
 
-            var items = discovered.Skills
-                .Select(skill => new SkillPickerItem(
-                    skill.RelativePath,
-                    skill.PackageId,
-                    skill.PackageVersion,
-                    installed.Contains(skill.RelativePath)))
-                .ToList();
+            var items = InteractiveSkills.ForInstall(discovered.Skills, installed);
 
             var picked = new SkillPicker(new SystemTerminal()).Choose(items, PickerTitle(discovered));
 
@@ -271,9 +265,7 @@ namespace DotnetPackageSkills.Cli
 
             // A tick keeps the skill. Anything already installed that is no longer ticked is a
             // deliberate removal, which is not the same as a skill simply going unmentioned.
-            var choice = new SkillChoice(
-                [.. discovered.Skills.Where(skill => picked.Contains(skill.RelativePath))],
-                [.. installed.Where(name => !picked.Contains(name))]);
+            var choice = InteractiveSkills.InstallChoice(discovered.Skills, installed, picked);
 
             return service.Install(request, discovered, choice);
         }
@@ -304,19 +296,19 @@ namespace DotnetPackageSkills.Cli
                 return [];
             }
 
-            var items = installed
-                .Select(entry => new SkillPickerItem(entry.Skill, entry.Package, entry.Version, Installed: true))
-                .ToList();
+            var items = InteractiveSkills.ForUninstall(
+                installed,
+                Path.GetFullPath(destination, workingDirectory));
 
             return new SkillPicker(new SystemTerminal())
-                .Choose(items, "Installed skills", PickerMode.Uninstall)
+                .Choose(items, "Which skills should be uninstalled?", PickerMode.Uninstall)
                 ?.ToList();
         }
 
         private static string PickerTitle(InstallResult discovered) =>
             discovered.Target is null
-                ? "Skills from the packages you named"
-                : $"Skills for {Path.GetFileName(discovered.Target)}";
+                ? "Which skills should be installed?"
+                : $"Which skills should be installed? ({Path.GetFileName(discovered.Target)})";
 
         /// <summary>
         /// Splits the uninstall filter, which unlike --package on install may omit the version

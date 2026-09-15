@@ -38,6 +38,7 @@ src/DotnetPackageSkills/
 ├── Cli/OutputWriter.cs     Human-readable and JSON rendering
 ├── Cli/SkillPicker.cs      The --interactive picker, paged so one screen is one page
 ├── Cli/ITerminal.cs        Console access behind an interface, so the picker can be tested
+├── Cli/InteractiveSkills.cs  Picker-only metadata and selection mapping
 ├── Infrastructure/         Process execution and the dotnet CLI wrapper
 ├── NuGet/                  Target detection, package listing, cache path resolution
 └── Skills/                 Discovery, copying, pruning, the install manifest
@@ -72,10 +73,13 @@ or write anything.
 empty, so a repository where nothing ships a skill never grows a stray `.agents/skills/`. The
 folder only goes when it is genuinely empty — hand-written skills keep it alive.
 
-**Don't read or interpret skill contents.** The tool identifies skill folders by structure and
-copies them. What a skill contains is the package author's business. An earlier version parsed
-SKILL.md frontmatter to show descriptions; it was removed because it added a YAML-shaped parsing
-problem to a file-copying tool.
+**Descriptions are read-only presentation metadata, not installation requirements.** Discovery
+still identifies skills by folder structure. Only interactive pickers read the top-level YAML
+`description` in `SKILL.md`, using a bounded frontmatter reader and an established YAML parser.
+Never interpret the Markdown body, execute metadata, invent a description, or rewrite the file.
+Missing metadata gets an explicit placeholder; unreadable or invalid metadata gets a visible
+warning without hiding the skill. This intentionally replaces the former no-frontmatter-parsing
+rule so users can make an informed selection. Regular reports, JSON, and manifests are unchanged.
 
 **Skill names from packages are untrusted input.** They become path segments in the user's repo.
 `SkillDiscovery.IsSafeSkillName` is the gate; keep it strict.
@@ -95,16 +99,19 @@ that set, so interactive mode can never remove something it did not show.
 **The picker pages, and that is the point.** A solution can reference many packages that ship
 skills. `SkillPicker` renders a frame that fits the window and redraws it in place, so the list
 can never scroll off the top unread — agreeing to skills you did not see is the failure mode worth
-designing against. Page size follows the terminal height rather than a constant: a fixed ceiling
-paged lists that already fitted, which is a keypress asking nothing. It never reads a `SKILL.md`;
-it shows the folder name, package, and version already on `BundledSkill`.
+designing against. Page size follows rendered height, including descriptions and help, rather
+than an item-count ceiling. The picker itself has no filesystem access: `InteractiveSkills`
+supplies package descriptions for install and installed-file descriptions for uninstall.
 
-**The frame is measured from its contents, not the window.** `SkillPicker.Layout` sizes the page
-to the number of skills and the width to the longest line any frame could produce, and `Render`
-draws only the skills a page actually holds — so a partial last page ends at its final skill
-rather than a run of blanks. Reserving a full page regardless left a single skill stranded above
-nine blank rows, and padding to the window stranded the page counter at the far edge of a wide
-terminal.
+**The frame is measured from its contents and bounded by the window.** Names and descriptions
+share a row with ` - ` immediately after the authored name, not a padded name column. Do not append
+package/version metadata or strip the package prefix from the name. Each skill's wrapped
+description continues at the skill-text edge and uses the remaining row width, not an indent
+as wide as the name. Measure those lines and every
+wrapped footer before assigning whole skill entries to pages. An oversized description must be
+scrollable, never silently truncated. Reflow on resize while preserving focus and selections.
+Page boundaries must not shift just because a checkbox or cursor changed. Partial last pages end
+at their actual content rather than a run of blank rows.
 
 Two things follow from redrawing in place, and both are easy to break. Rows are padded to the
 measured width, and rows below a shorter frame are blanked, because overwriting is the only way
@@ -112,16 +119,17 @@ to erase without ANSI. And the widest possible summary is measured rather than t
 since the removal clause appears and disappears as you select. Chrome that would do nothing is
 dropped: no counter on a single page, no movement or select-all keys for a single skill.
 
-**The legend names the action, then the key.** "space toggle" only reads to someone who has
-already been told what it means; the reader is asking what they can do here, so "toggle selection
-(space)" answers that and the key follows. This came out of watching a demo land badly, which is
-worth more than any amount of arguing about it beforehand.
+**Keyboard hints follow Aspire's checklist style.** The primary hint is
+`(Press <space> to select, <enter> to accept)`, below the list. Use the same angle-bracket key
+notation for paging, select-all, clear-all, cancel, and description scrolling, beginning each
+keyboard-help line with `Press`. Wrap help rather than clipping away the keys. Only advertise
+paging and scrolling when they are useful.
 
-**A row says what confirming would do to it, not what it is.** The status column read "new" or
-"installed", which classified the skill and left the reader to work out the consequence — and on
-a first run every row said "new", so a whole column carried nothing. It now says `will install`,
-`will remove`, or `installed`, and a row that changes nothing says nothing at all. `Layout`
-measures rows in both tick states because the status changes with the box.
+**Focus and pending actions are separate cues.** Blue identifies the focus marker, green marks a
+pending installation, and red marks a pending removal. An installed skill being kept is neutral.
+Do not paint a whole focused row blue and obscure its action color. Descriptions stay neutral,
+and a summary counts pending actions. No-color terminals use compact `+`/`-` action markers
+instead; respect `NO_COLOR`. A dedicated status column would take space away from descriptions.
 
 **A tick means the opposite thing in each picker, and that is deliberate.** Installing, it keeps
 the skill, so what is already there starts ticked and pressing enter changes nothing.
@@ -136,14 +144,21 @@ process mid-frame, so the restore never runs and the user is left typing into a 
 cursor. Taken as a key it cancels through the same path as `esc`. Note the modifier is tested
 before the switch, because a bare `c` clears the selection.
 
+**Resizing invalidates an in-progress frame.** Read width and height together, restart a redraw
+if its viewport changes, and clear cells in place rather than scrolling blank lines. Otherwise
+old picker copies accumulate in terminal history and can wrap incorrectly when the host resizes.
+Preserve prior scrollback, focus, and selections; never swallow unrelated rendering failures.
+
 Every render also parks the cursor directly below the last line it drew, rather than at the bottom
 of the rows the frame reserved. That is what the shell prompt lands on if the process dies without
 unwinding — `SkillPickerTests` pins it, and the assertion fails if the parking is removed.
 
-**The picker frame is ASCII, and stays that way.** Windows consoles default to an OEM code page
-that silently drops arrows and box-drawing glyphs, so a legend written with `↑↓←→` renders as gaps
-on the terminal most users are on. `SkillPickerTests` asserts every rendered character is printable
-ASCII; keep it passing rather than reaching for `Console.OutputEncoding`.
+**Picker chrome is ASCII; author text is not restricted to English.** Keep control hints and
+markers ASCII so legacy console encodings do not lose them. Display Unicode descriptions without
+splitting text elements, measuring terminal cells rather than UTF-16 code units. Strip unsafe
+terminal control sequences from author-supplied text. All color goes through `ITerminal`, and the
+picker uses BOM-less UTF-8 while prompting. Restore the original encoding and terminal styling
+when it exits or fails, so ordinary command output retains its existing behavior.
 
 **`--package` refuses floating versions and ranges.** Resolving one means choosing a version, and
 the only correct answer comes from a project's restore. `PackageCoordinate.Parse` is the gate.
@@ -183,6 +198,30 @@ The interactive picker goes through `ITerminal`, which `FakeTerminal` drives fro
 sequence and reads back as a screen buffer. It models a buffer rather than concatenating writes
 because the picker redraws in place, so appending every write would show frames stacked on top of
 each other instead of the one page a user sees.
+
+### Real terminal regressions on Windows
+
+The optional ConPTY suite launches the actual executable in a Windows pseudo-console, sends
+keyboard input, resizes the console, and checks the rendered screen and colors. Its fixtures use
+an isolated extracted-package layout and a solution restored from a local-only package feed,
+never your global cache or installed skills. Python packages are test-only dependencies, not
+dependencies of the .NET tool.
+
+```powershell
+dotnet build -c Release
+python -m venv artifacts\terminal-venv
+artifacts\terminal-venv\Scripts\python.exe -m pip install -r tests\terminal\requirements.txt
+artifacts\terminal-venv\Scripts\python.exe tests\terminal\verify_picker.py `
+  --tool src\DotnetPackageSkills\bin\Release\net10.0\dotnet-package-skills.exe `
+  --artifacts artifacts\terminal-results
+```
+
+Rendered frames and raw terminal output are saved under the supplied artifacts directory.
+The suite checks descriptions, action/focus colors, no-color markers, variable-height pagination,
+scrolling, resize, confirm/cancel, dry runs, ownership preservation, and the unchanged JSON contract.
+Fixtures are removed after each case; logs remain available for diagnosing failures.
+
+### Naming unit tests
 
 Name tests as a sentence describing the behaviour, not the method under test:
 
