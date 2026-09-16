@@ -2,6 +2,9 @@
 
 Copies agent skills bundled inside NuGet packages into a folder your coding agent actually reads.
 
+For a product-oriented command reference and sample outputs, see the
+[functional specification](docs/functional-spec.md).
+
 ## The problem
 
 Package authors are the domain experts on their own libraries, and some of them now ship an
@@ -46,7 +49,7 @@ and removes what is not.
 
 | Command | What it does |
 | --- | --- |
-| `install` | Copy bundled skills into the destination. Removes stale skills no longer provided by direct dependencies, and any you turn off with `--interactive`. |
+| `install` | Copy bundled skills into the destination. Noninteractive target runs clean up stale skills; interactive runs remove only skills you explicitly turn off. |
 | `list` | Show which packages ship skills, without copying anything. |
 | `uninstall` | Remove skills this tool copied in. Add `--interactive` to pick them. |
 
@@ -69,6 +72,9 @@ describing a release you do not actually reference.
 
 Naming packages explicitly is **additive** — it copies what you asked for and leaves everything
 else alone. Only a target describes a complete set of packages, so only a target prunes.
+Automatic pruning applies only to noninteractive installs with complete discovery. If a resolved
+target package is missing from the selected cache, installation fails before any destination
+changes; restore first. `list` can still report what is missing.
 
 ### Choosing which skills to install
 
@@ -131,8 +137,11 @@ descriptions say `No description provided.`; unreadable or malformed metadata sh
 description warning without hiding the skill or preventing its selection. Only interactive
 pickers read this metadata: regular reports, JSON output, and the ownership manifest are unchanged.
 
-Skills you already have start selected, so pressing enter straight away changes
-nothing and a new skill is always an explicit opt-in.
+Skills you already have start selected, and a new skill is always an explicit opt-in. Target-based
+pickers also show installed copies that the project no longer supplies, kept checked by default.
+Even with no new candidates, they remain available for review instead of being removed silently.
+Interactive installation removes only explicit deselections; it never adds hidden pruning to the
+removal count. Accepting can still refresh the checked skills that have current package sources.
 
 **Turning off a skill you already have deletes it** — including under `--package`, where install is
 otherwise additive. Pruning is inferred from a complete package set; deselecting is you saying so.
@@ -164,6 +173,8 @@ Nothing starts ticked, so a mistaken enter removes nothing. Narrow the list firs
 `--package` if you only care about one, and add `--dry-run` to see the outcome without it
 happening. Descriptions are read from the installed copies, not from the NuGet cache. A missing
 or damaged `SKILL.md` does not prevent removal of a manifest-owned skill.
+Package matching ignores case, and version filters are normalized in both modes (`1.10` matches
+`1.10.0`). Blank, missing, or repeated uninstall `--package` values are errors, not an unfiltered uninstall.
 
 ### Options
 
@@ -245,8 +256,8 @@ out entirely when you name packages with `--package`. `list` always reports `"dr
 
 `uninstall` returns `destination`, `dryRun`, and `removed`.
 
-Failures print to **stderr** and exit non-zero, leaving stdout empty rather than half an object.
-So check the exit code before parsing — piping straight into a parser gives it nothing to read:
+Operational failures print to **stderr** and exit non-zero without a JSON success object.
+Argument/usage errors can also print help on stdout. Check the exit code before parsing:
 
 ```bash
 if json=$(dotnet package-skills list --json); then
@@ -307,6 +318,14 @@ Destination names are compared case-insensitively. If two package skills choose 
 first one in deterministic package order is copied and later collisions are skipped with a warning.
 An existing destination folder not tracked by this tool is treated as user-owned and is also
 skipped, never overwritten.
+The same protection applies to a name already owned by a different package: every install mode
+warns and preserves that owner rather than transferring it automatically. Explicitly uninstall
+the old skill before installing its replacement. Upgrading the same package remains supported.
+If both the owner and another package offer the same name, installation prefers the owner's
+candidate so the conflict does not prevent a legitimate refresh.
+
+Refreshing a tracked skill replaces its entire folder, including local edits and added files.
+Keep hand-written guidance in separate, untracked skill folders.
 
 ### Package versions
 
@@ -388,6 +407,9 @@ If that manifest exists but cannot be read, `install` and `uninstall` stop witho
 anything and preserve the file for repair. Resolve any merge conflict or restore it from source
 control before retrying. If it cannot be recovered, move the whole destination folder aside before
 installing again; the tool will not guess which existing folders it owns.
+Missing ownership data and duplicate skill claims are also treated as damaged manifests.
+Concurrent tool operations on the same destination are serialized, and an interactive choice
+is rejected if ownership changed before it could be applied.
 
 ## A note on trust
 

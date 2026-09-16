@@ -8,6 +8,8 @@ public class PackageCoordinateTests
     [InlineData("Mockly@1.10.0", "Mockly", "1.10.0")]
     [InlineData("Contoso.Widgets@2.3.0", "Contoso.Widgets", "2.3.0")]
     [InlineData("My_Package-Name@1.0.0-beta.1", "My_Package-Name", "1.0.0-beta.1")]
+    [InlineData("_Acme@1.0.0", "_Acme", "1.0.0")]
+    [InlineData("Acme_@1.0.0", "Acme_", "1.0.0")]
     [InlineData("Widgets@2.0", "Widgets", "2.0")]
     [InlineData("Widgets@1.2.3.4", "Widgets", "1.2.3.4")]
     [InlineData("Widgets@1.2.3+sha.abc", "Widgets", "1.2.3+sha.abc")]

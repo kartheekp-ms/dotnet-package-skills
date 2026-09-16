@@ -3,6 +3,7 @@ using DotnetPackageSkills;
 using DotnetPackageSkills.Cli;
 using DotnetPackageSkills.Infrastructure;
 using DotnetPackageSkills.NuGet;
+using DotnetPackageSkills.Skills;
 
 return CommandLineBuilder.Build().Parse(args).Invoke();
 
@@ -66,8 +67,8 @@ namespace DotnetPackageSkills.Cli
             var interactive = new Option<bool>("--interactive", "-i")
             {
                 Description =
-                    "Choose which discovered skills to install, with descriptions, one page at a time. Skills already " +
-                    "installed start selected; turning one off removes it.",
+                    "Choose which skills to install or keep, with descriptions, one page at a time. " +
+                    "Installed skills start selected; only turning one off removes it.",
             };
 
             var uninstallPackage = new Option<string?>("--package", "-p")
@@ -76,7 +77,28 @@ namespace DotnetPackageSkills.Cli
                     "Remove only skills from this package. Accepts Id to remove every version, " +
                     "or Id@Version to remove one.",
                 HelpName = "ID[@VERSION]",
+                Arity = ArgumentArity.ExactlyOne,
             };
+            uninstallPackage.Validators.Add(result =>
+            {
+                if (result.IdentifierTokenCount > 1)
+                {
+                    result.AddError("--package can be specified only once for uninstall.");
+                    return;
+                }
+
+                if (result.Tokens.Count == 1)
+                {
+                    try
+                    {
+                        ParseUninstallFilter(result.Tokens[0].Value);
+                    }
+                    catch (PackageSkillsException error)
+                    {
+                        result.AddError(error.Message);
+                    }
+                }
+            });
 
             // Its own option rather than the one install uses, because "copy skills into" is
             // nonsense on a command that only deletes. It still has to exist: skills installed
@@ -158,13 +180,13 @@ namespace DotnetPackageSkills.Cli
                 var (id, version) = ParseUninstallFilter(parseResult.GetValue(uninstallPackage));
                 var root = Path.GetFullPath(destinationValue, workingDirectory);
 
-                IReadOnlyCollection<string>? chosen = null;
+                UninstallChoice? choice = null;
 
                 if (parseResult.GetValue(uninstallInteractive))
                 {
-                    chosen = ChooseWhatToRemove(destinationValue, workingDirectory, id, version);
+                    choice = ChooseWhatToRemove(destinationValue, workingDirectory, id, version);
 
-                    if (chosen is null)
+                    if (choice is null)
                     {
                         new OutputWriter(Console.Out).WriteCancelled();
                         return;
@@ -172,7 +194,8 @@ namespace DotnetPackageSkills.Cli
                 }
 
                 var removed = new SkillInstallService(new ProcessRunner())
-                    .Uninstall(destinationValue, workingDirectory, id, version, isDryRun, chosen);
+                    .Uninstall(destinationValue, workingDirectory, id, version, isDryRun,
+                        choice?.Selected, choice?.ExpectedInstalled);
 
                 Report(
                     parseResult,
@@ -244,17 +267,10 @@ namespace DotnetPackageSkills.Cli
         private static InstallResult? InstallInteractively(SkillInstallService service, InstallRequest request)
         {
             var discovered = service.Discover(request);
-
-            // Nothing to choose between, so there is no prompt to show. Install anyway, because
-            // pruning still has work to do when a package stopped shipping a skill.
-            if (discovered.Skills.Count == 0)
-            {
-                return service.Install(request, discovered, choice: null);
-            }
-
-            var installed = SkillInstallService.InstalledSkillNames(discovered.Destination);
-
-            var items = InteractiveSkills.ForInstall(discovered.Skills, installed);
+            var installed = SkillInstallService.InstalledSkills(discovered.Destination, request.WorkingDirectory);
+            var prepared = service.PrepareInteractiveInstall(request, discovered, installed);
+            var items = InteractiveSkills.ForInstall(
+                prepared.Skills, installed, prepared.Destination, includeRetained: request.Packages.Count == 0);
 
             var picked = new SkillPicker(new SystemTerminal()).Choose(items, PickerTitle(discovered));
 
@@ -265,9 +281,9 @@ namespace DotnetPackageSkills.Cli
 
             // A tick keeps the skill. Anything already installed that is no longer ticked is a
             // deliberate removal, which is not the same as a skill simply going unmentioned.
-            var choice = InteractiveSkills.InstallChoice(discovered.Skills, installed, picked);
+            var choice = InteractiveSkills.InstallChoice(prepared.Skills, installed, items, picked);
 
-            return service.Install(request, discovered, choice);
+            return service.Install(request, prepared, choice);
         }
 
         /// <summary>
@@ -279,30 +295,29 @@ namespace DotnetPackageSkills.Cli
         /// nothing a user wrote themselves. An empty list still returns an empty selection
         /// rather than prompting, so the report can say there was nothing to remove.
         /// </remarks>
-        private static IReadOnlyCollection<string>? ChooseWhatToRemove(
+        private static UninstallChoice? ChooseWhatToRemove(
             string destination,
             string workingDirectory,
             string? packageId,
             string? packageVersion)
         {
-            var installed = SkillInstallService.InstalledSkills(destination, workingDirectory)
-                .Where(entry => packageId is null ||
-                                entry.Package.Equals(packageId, StringComparison.OrdinalIgnoreCase))
-                .Where(entry => packageVersion is null || entry.Version == packageVersion)
+            var installed = SkillInstallService.InstalledSkills(destination, workingDirectory);
+            var matching = installed
+                .Where(entry => SkillInstaller.Matches(entry, packageId, packageVersion))
                 .ToList();
 
-            if (installed.Count == 0)
+            if (matching.Count == 0)
             {
-                return [];
+                return new UninstallChoice([], installed);
             }
 
             var items = InteractiveSkills.ForUninstall(
-                installed,
+                matching,
                 Path.GetFullPath(destination, workingDirectory));
 
-            return new SkillPicker(new SystemTerminal())
-                .Choose(items, "Which skills should be uninstalled?", PickerMode.Uninstall)
-                ?.ToList();
+            var selected = new SkillPicker(new SystemTerminal())
+                .Choose(items, "Which skills should be uninstalled?", PickerMode.Uninstall);
+            return selected is null ? null : new UninstallChoice(selected.ToList(), installed);
         }
 
         private static string PickerTitle(InstallResult discovered) =>
@@ -314,16 +329,25 @@ namespace DotnetPackageSkills.Cli
         /// Splits the uninstall filter, which unlike --package on install may omit the version
         /// to mean "every version of this package".
         /// </summary>
-        private static (string? Id, string? Version) ParseUninstallFilter(string? value)
+        internal static (string? Id, string? Version) ParseUninstallFilter(string? value)
         {
-            if (string.IsNullOrWhiteSpace(value))
+            if (value is null)
             {
                 return (null, null);
             }
 
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                throw new PackageSkillsException(
+                    "--package requires a non-empty package ID, optionally followed by @Version. " +
+                    "Omit --package only when you intend to remove all tracked skills.");
+            }
+
             if (!value.Contains(PackageCoordinate.Separator))
             {
-                return (value.Trim(), null);
+                var id = value.Trim();
+                PackageCoordinate.ValidateId(id);
+                return (id, null);
             }
 
             var coordinate = PackageCoordinate.Parse(value);

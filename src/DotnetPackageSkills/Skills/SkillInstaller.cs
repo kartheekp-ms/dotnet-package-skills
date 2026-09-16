@@ -32,13 +32,17 @@ public sealed class SkillInstaller
         IReadOnlyList<BundledSkill> skills,
         bool dryRun,
         bool prune = true,
-        IReadOnlyCollection<string>? deselected = null)
+        IReadOnlyCollection<string>? deselected = null,
+        IReadOnlyCollection<TrackedSkill>? expectedInstalled = null)
     {
+        using var destinationLock = DestinationLock.Acquire(destinationRoot);
         var manifest = InstallManifest.Load(destinationRoot);
         var trackedSkills = manifest.EnumerateSkills().ToList();
-        var (selected, duplicateSkips) = SelectUniqueDestinations(skills);
+        CheckOwnershipSnapshot(trackedSkills, expectedInstalled);
+        var (selected, duplicateSkips) = SelectUniqueDestinations(skills, trackedSkills);
         var accepted = new List<BundledSkill>();
         var skipped = new List<SkippedSkill>(duplicateSkips);
+        var protectedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var skill in selected)
         {
@@ -49,6 +53,11 @@ public sealed class SkillInstaller
             if (File.Exists(destination))
             {
                 skipped.Add(ToSkipped(skill, "the destination path already exists as a file"));
+                if (tracked is not null)
+                {
+                    protectedPaths.Add(tracked.Skill);
+                }
+
                 continue;
             }
 
@@ -60,12 +69,13 @@ public sealed class SkillInstaller
                 continue;
             }
 
-            if (!prune && tracked is not null && !HasSameOwner(tracked, skill))
+            if (tracked is not null && !HasSameOwner(tracked, skill))
             {
                 skipped.Add(ToSkipped(
                     skill,
                     $"the destination folder is managed for {tracked.Package} {tracked.Version} " +
-                    $"skill '{tracked.Skill}'"));
+                    $"skill '{tracked.Skill}'; uninstall that skill before replacing its owner"));
+                protectedPaths.Add(tracked.Skill);
                 continue;
             }
 
@@ -80,9 +90,21 @@ public sealed class SkillInstaller
 
         var stale = trackedSkills
             .Where(entry => !current.Contains(entry.Skill))
+            .Where(entry => !protectedPaths.Contains(entry.Skill))
             .Where(entry => prune || removeAnyway.Contains(entry.Skill))
             .OrderBy(entry => entry.Skill, StringComparer.Ordinal)
             .ToList();
+
+        foreach (var skill in accepted)
+        {
+            if (!Directory.Exists(skill.SourcePath) ||
+                !File.Exists(Path.Combine(skill.SourcePath, SkillDiscovery.SkillManifestFileName)))
+            {
+                throw new PackageSkillsException(
+                    $"The source for skill '{skill.SkillName}' is no longer available at '{skill.SourcePath}'. " +
+                    "Restore its package and run the command again. No skills were changed.");
+            }
+        }
 
         if (dryRun)
         {
@@ -90,7 +112,10 @@ public sealed class SkillInstaller
         }
 
         // Remove before copying so a stale ancestor can never delete a freshly copied skill.
-        var removed = stale.Where(entry => RemoveSkillDirectory(destinationRoot, entry.Skill)).ToList();
+        foreach (var entry in stale)
+        {
+            RemoveSkillDirectory(destinationRoot, entry.Skill);
+        }
 
         foreach (var skill in accepted)
         {
@@ -101,11 +126,12 @@ public sealed class SkillInstaller
             new TrackedSkill(skill.PackageId, skill.PackageVersion, skill.SkillName));
 
         var next = prune
-            ? installed
+            ? installed.Concat(trackedSkills.Where(entry => protectedPaths.Contains(entry.Skill)))
             // Additive: keep what was already tracked, replacing entries we just rewrote and
             // dropping the ones the user deselected.
             : trackedSkills
-                .Where(entry => !current.Contains(entry.Skill) && !removeAnyway.Contains(entry.Skill))
+                .Where(entry => !current.Contains(entry.Skill) &&
+                                (!removeAnyway.Contains(entry.Skill) || protectedPaths.Contains(entry.Skill)))
                 .Concat(installed);
 
         manifest.SetSkills(next);
@@ -124,7 +150,7 @@ public sealed class SkillInstaller
             manifest.Save(destinationRoot);
         }
 
-        return new InstallOutcome(accepted, removed, skipped);
+        return new InstallOutcome(accepted, stale, skipped);
     }
 
     /// <summary>
@@ -140,8 +166,10 @@ public sealed class SkillInstaller
         string? packageId,
         string? packageVersion,
         bool dryRun,
-        IReadOnlyCollection<string>? only = null)
+        IReadOnlyCollection<string>? only = null,
+        IReadOnlyCollection<TrackedSkill>? expectedInstalled = null)
     {
+        using var destinationLock = DestinationLock.Acquire(destinationRoot);
         var manifest = InstallManifest.Load(destinationRoot);
 
         var chosen = only is null
@@ -149,6 +177,7 @@ public sealed class SkillInstaller
             : new HashSet<string>(only, StringComparer.OrdinalIgnoreCase);
 
         var trackedSkills = manifest.EnumerateSkills().ToList();
+        CheckOwnershipSnapshot(trackedSkills, expectedInstalled);
         var targeted = trackedSkills
             .Where(entry => Matches(entry, packageId, packageVersion))
             .Where(entry => chosen is null || chosen.Contains(entry.Skill))
@@ -182,7 +211,7 @@ public sealed class SkillInstaller
         return targeted;
     }
 
-    private static bool Matches(TrackedSkill entry, string? packageId, string? packageVersion)
+    internal static bool Matches(TrackedSkill entry, string? packageId, string? packageVersion)
     {
         if (packageId is not null && !entry.Package.Equals(packageId, StringComparison.OrdinalIgnoreCase))
         {
@@ -193,6 +222,18 @@ public sealed class SkillInstaller
         return packageVersion is null ||
                PackagePathResolver.NormalizeVersion(entry.Version)
                    .Equals(PackagePathResolver.NormalizeVersion(packageVersion), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void CheckOwnershipSnapshot(
+        IReadOnlyCollection<TrackedSkill> installed,
+        IReadOnlyCollection<TrackedSkill>? expected)
+    {
+        if (expected is not null && !expected.ToHashSet().SetEquals(installed))
+        {
+            throw new PackageSkillsException(
+                "Installed skill ownership changed while the picker was open. " +
+                "No skills were changed by this operation. Run the command again to review the current state.");
+        }
     }
 
     private static string ToAbsolute(string destinationRoot, string relativePath) =>
@@ -289,31 +330,40 @@ public sealed class SkillInstaller
     }
 
     private static (List<BundledSkill> Selected, List<SkippedSkill> Skipped) SelectUniqueDestinations(
-        IReadOnlyList<BundledSkill> skills)
+        IReadOnlyList<BundledSkill> skills,
+        IReadOnlyList<TrackedSkill> installed)
     {
         var selected = new List<BundledSkill>();
         var skipped = new List<SkippedSkill>();
-        var destinations = new Dictionary<string, BundledSkill>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var skill in skills)
+        foreach (var group in skills.GroupBy(skill => skill.RelativePath, StringComparer.OrdinalIgnoreCase))
         {
-            if (destinations.TryAdd(skill.RelativePath, skill))
+            var candidates = group.ToList();
+            var owner = installed.FirstOrDefault(entry => entry.Skill.Equals(group.Key, StringComparison.OrdinalIgnoreCase));
+            var retainedIndex = owner is null ? 0 : candidates.FindIndex(skill => HasSameOwner(owner, skill));
+            retainedIndex = Math.Max(0, retainedIndex);
+            var retained = candidates[retainedIndex];
+            selected.Add(retained);
+            for (var index = 0; index < candidates.Count; index++)
             {
-                selected.Add(skill);
-                continue;
-            }
+                if (index == retainedIndex)
+                {
+                    continue;
+                }
 
-            var retained = destinations[skill.RelativePath];
-            skipped.Add(ToSkipped(
-                skill,
-                $"conflicts with {retained.PackageId} {retained.PackageVersion} skill " +
-                $"'{retained.SkillName}', which was selected first"));
+                skipped.Add(ToSkipped(
+                    candidates[index],
+                    $"conflicts with {retained.PackageId} {retained.PackageVersion} skill " +
+                    $"'{retained.SkillName}', " +
+                    (owner is not null && HasSameOwner(owner, retained)
+                        ? "which belongs to the current owner"
+                        : "which was selected first")));
+            }
         }
 
         return (selected, skipped);
     }
 
-    private static bool HasSameOwner(TrackedSkill entry, BundledSkill skill) =>
+    internal static bool HasSameOwner(TrackedSkill entry, BundledSkill skill) =>
         entry.Package.Equals(skill.PackageId, StringComparison.OrdinalIgnoreCase) &&
         entry.Skill.Equals(skill.SkillName, StringComparison.OrdinalIgnoreCase);
 

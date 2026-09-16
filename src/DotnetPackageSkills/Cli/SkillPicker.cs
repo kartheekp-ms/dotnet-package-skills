@@ -13,7 +13,8 @@ internal sealed record SkillPickerItem(
     string Version,
     bool Installed,
     string? Description = null,
-    string? DescriptionWarning = null);
+    string? DescriptionWarning = null,
+    bool Retained = false);
 
 /// <summary>A paged checklist whose ticks mean keep/install, or explicitly remove in uninstall mode.</summary>
 internal sealed class SkillPicker(ITerminal terminal)

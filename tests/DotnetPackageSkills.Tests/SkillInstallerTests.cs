@@ -268,8 +268,10 @@ public class SkillInstallerTests
         Assert.Equal("Contoso.Widgets", Assert.Single(InstallManifest.Load(destination).Installed).Package);
     }
 
-    [Fact]
-    public void Complete_install_can_transfer_a_path_to_the_selected_package()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Complete_install_preserves_a_path_owned_by_another_package(bool dryRun)
     {
         using var temp = new TempDirectory();
         var destination = temp.Combine("dest");
@@ -277,14 +279,123 @@ public class SkillInstallerTests
             destination,
             [Skill(temp, "Contoso.Widgets", "2.3.0", "shared-skill")],
             dryRun: false);
+        var contents = File.ReadAllBytes(Path.Combine(destination, "shared-skill", "SKILL.md"));
+        var manifest = File.ReadAllBytes(Path.Combine(destination, InstallManifest.FileName));
 
         var outcome = _installer.Install(
             destination,
             [Skill(temp, "Mockly", "1.10.0", "shared-skill")],
-            dryRun: false);
+            dryRun);
 
-        Assert.Empty(outcome.Skipped);
-        Assert.Equal("Mockly", Assert.Single(InstallManifest.Load(destination).Installed).Package);
+        Assert.Empty(outcome.Installed);
+        Assert.Empty(outcome.Removed);
+        Assert.Contains("Contoso.Widgets", Assert.Single(outcome.Skipped).Reason);
+        Assert.Equal("Contoso.Widgets", Assert.Single(InstallManifest.Load(destination).Installed).Package);
+        Assert.Equal(contents, File.ReadAllBytes(Path.Combine(destination, "shared-skill", "SKILL.md")));
+        Assert.Equal(manifest, File.ReadAllBytes(Path.Combine(destination, InstallManifest.FileName)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_conflicting_copy_cannot_delete_its_current_owner_through_deselection(bool prune)
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(destination, [Skill(temp, "Alpha", "1.0.0", "shared")], dryRun: false);
+
+        var result = _installer.Install(
+            destination, [Skill(temp, "Beta", "2.0.0", "shared")],
+            dryRun: false, prune: prune, deselected: ["shared"]);
+
+        Assert.Empty(result.Installed);
+        Assert.Empty(result.Removed);
+        Assert.Single(result.Skipped);
+        Assert.Equal("Alpha", Assert.Single(InstallManifest.Load(destination).Installed).Package);
+        Assert.True(File.Exists(Path.Combine(destination, "shared", "SKILL.md")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_changed_owner_invalidates_an_interactive_selection_before_writing(bool uninstall)
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(destination, [Skill(temp, "Alpha", "1.0.0", "shared")], dryRun: false);
+        var observed = InstallManifest.Load(destination).EnumerateSkills().ToList();
+        _installer.Uninstall(destination, null, null, dryRun: false);
+        _installer.Install(destination, [Skill(temp, "Beta", "2.0.0", "shared")], dryRun: false);
+        var before = File.ReadAllBytes(Path.Combine(destination, InstallManifest.FileName));
+
+        var error = Assert.Throws<PackageSkillsException>(() =>
+        {
+            if (uninstall)
+            {
+                _installer.Uninstall(destination, null, null, false, ["shared"], observed);
+            }
+            else
+            {
+                _installer.Install(destination, [], false, false, ["shared"], observed);
+            }
+        });
+
+        Assert.Contains("ownership changed", error.Message);
+        Assert.Equal(before, File.ReadAllBytes(Path.Combine(destination, InstallManifest.FileName)));
+        Assert.True(File.Exists(Path.Combine(destination, "shared", "SKILL.md")));
+    }
+
+    [Fact]
+    public void Same_package_upgrades_remain_allowed_in_an_additive_selection()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(destination, [Skill(temp, "Alpha", "1.0.0", "shared")], dryRun: false);
+
+        var result = _installer.Install(
+            destination, [Skill(temp, "Alpha", "2.0.0", "shared")], dryRun: false, prune: false);
+
+        Assert.Empty(result.Skipped);
+        Assert.Single(result.Installed);
+        Assert.Equal("2.0.0", Assert.Single(InstallManifest.Load(destination).Installed).Version);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_source_that_disappears_after_discovery_blocks_all_writes(bool dryRun)
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(destination, [Skill(temp, "Old", "1.0.0", "old")], dryRun: false);
+        var first = Skill(temp, "Alpha", "1.0.0", "first");
+        var missing = Skill(temp, "Beta", "1.0.0", "missing");
+        Directory.Delete(missing.SourcePath, recursive: true);
+        var before = File.ReadAllBytes(Path.Combine(destination, InstallManifest.FileName));
+
+        var error = Assert.Throws<PackageSkillsException>(() =>
+            _installer.Install(destination, [first, missing], dryRun: dryRun));
+
+        Assert.Contains("no longer available", error.Message);
+        Assert.Equal(before, File.ReadAllBytes(Path.Combine(destination, InstallManifest.FileName)));
+        Assert.True(File.Exists(Path.Combine(destination, "old", "SKILL.md")));
+        Assert.False(Directory.Exists(Path.Combine(destination, "first")));
+    }
+
+    [Fact]
+    public void Pruning_reports_removed_tracking_entries_even_when_the_folder_was_already_deleted()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(destination, [Skill(temp, "Alpha", "1.0.0", "gone")], dryRun: false);
+        Directory.Delete(Path.Combine(destination, "gone"), recursive: true);
+
+        var preview = _installer.Install(destination, [], dryRun: true);
+        var applied = _installer.Install(destination, [], dryRun: false);
+
+        Assert.Equal(preview.Removed, applied.Removed);
+        Assert.Equal("gone", Assert.Single(applied.Removed).Skill);
+        Assert.False(File.Exists(Path.Combine(destination, InstallManifest.FileName)));
     }
 
     [Fact]
@@ -612,10 +723,15 @@ public class SkillInstallerTests
 
     [Theory]
     [InlineData("null")]
+    [InlineData("{}")]
+    [InlineData("""{"note":"missing ownership data"}""")]
+    [InlineData("""{"installed":[],"Installed":[]}""")]
     [InlineData("""{"installed":null}""")]
     [InlineData("""{"installed":[{"package":null,"version":"1.0.0","skills":["mockly"]}]}""")]
     [InlineData("""{"installed":[{"package":"Mockly","version":"1.0.0","skills":[null]}]}""")]
     [InlineData("""{"installed":[{"package":"Mockly","version":"1.0.0","skills":["../outside"]}]}""")]
+    [InlineData("""{"installed":[{"package":"Alpha","version":"1.0.0","skills":["shared"]},{"package":"Beta","version":"1.0.0","skills":["SHARED"]}]}""")]
+    [InlineData("""{"installed":[{"package":"Alpha","version":"1.0.0","skills":["shared","shared"]}]}""")]
     public void A_manifest_with_an_unusable_shape_fails_instead_of_crashing_later(string contents)
     {
         using var temp = new TempDirectory();

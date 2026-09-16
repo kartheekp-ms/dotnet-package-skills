@@ -1,9 +1,74 @@
 using DotnetPackageSkills.Cli;
+using DotnetPackageSkills.Skills;
 
 namespace DotnetPackageSkills.Tests;
 
 public class CommandLineTests
 {
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("\t\r\n")]
+    public void A_supplied_blank_uninstall_filter_is_rejected(string filter)
+    {
+        var error = Assert.Throws<PackageSkillsException>(() => CommandLineBuilder.ParseUninstallFilter(filter));
+
+        Assert.Contains("non-empty package ID", error.Message);
+        Assert.NotEmpty(CommandLineBuilder.Build().Parse(["uninstall", "--package", filter]).Errors);
+    }
+
+    [Theory]
+    [InlineData("--package")]
+    [InlineData("-p")]
+    public void An_uninstall_package_option_without_a_value_is_rejected(string option)
+    {
+        Assert.NotEmpty(CommandLineBuilder.Build().Parse(["uninstall", option]).Errors);
+        Assert.NotEmpty(CommandLineBuilder.Build().Parse(["uninstall", option, "--dry-run"]).Errors);
+    }
+
+    [Fact]
+    public void Only_an_absent_uninstall_filter_means_all_packages()
+    {
+        Assert.Equal((null, null), CommandLineBuilder.ParseUninstallFilter(null));
+        Assert.Equal(("Mockly", null), CommandLineBuilder.ParseUninstallFilter(" Mockly "));
+    }
+
+    [Theory]
+    [InlineData("--package", "only once")]
+    [InlineData("-p", "only once")]
+    [InlineData("--package=", "only once")]
+    [InlineData("--package=Alpha", "expects a single argument")]
+    public void Repeated_uninstall_filters_are_rejected_even_when_the_last_value_is_missing(
+        string repeated, string message)
+    {
+        var result = CommandLineBuilder.Build().Parse(
+            ["uninstall", "--dry-run", "--package", "Alpha", repeated]);
+
+        Assert.Contains(result.Errors, error => error.Message.Contains(message, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("_Acme")]
+    [InlineData("Acme_")]
+    [InlineData("_")]
+    public void Uninstall_accepts_valid_underscore_boundary_package_ids(string id)
+    {
+        Assert.Equal((id, null), CommandLineBuilder.ParseUninstallFilter(id));
+        Assert.Empty(CommandLineBuilder.Build().Parse(["uninstall", "--package", id, "--dry-run"]).Errors);
+    }
+
+    [Theory]
+    [InlineData("1.2", "1.2.0")]
+    [InlineData("1.2.0.0", "1.2.0")]
+    [InlineData("1.2.0-RC.1", "1.2.0-rc.1")]
+    public void Uninstall_filter_matching_normalizes_versions_for_both_modes(string filterVersion, string installedVersion)
+    {
+        var (id, version) = CommandLineBuilder.ParseUninstallFilter($"mockly@{filterVersion}");
+
+        Assert.True(SkillInstaller.Matches(new TrackedSkill("Mockly", installedVersion, "usage"), id, version));
+        Assert.False(SkillInstaller.Matches(new TrackedSkill("Other", installedVersion, "usage"), id, version));
+    }
+
     [Fact]
     public void Uninstall_accepts_the_interactive_flag()
     {

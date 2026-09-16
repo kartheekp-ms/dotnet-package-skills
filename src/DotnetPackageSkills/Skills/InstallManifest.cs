@@ -47,6 +47,7 @@ public sealed class InstallManifest
     public string Note { get; set; } = NoteText;
 
     [JsonPropertyName("installed")]
+    [JsonRequired]
     public List<ManifestEntry> Installed { get; set; } = [];
 
     /// <summary>Loads and validates the manifest without changing it.</summary>
@@ -67,15 +68,15 @@ public sealed class InstallManifest
 
         try
         {
-            var manifest = JsonSerializer.Deserialize<InstallManifest>(
-                File.ReadAllText(path),
-                SerializerOptions);
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            RejectDuplicateProperties(document.RootElement);
+            var manifest = document.RootElement.Deserialize<InstallManifest>(SerializerOptions);
 
             return Validate(manifest, path);
         }
         catch (JsonException ex)
         {
-            throw CannotRead(path, "it is not valid JSON", ex);
+            throw CannotRead(path, "it does not contain valid manifest JSON", ex);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -95,6 +96,7 @@ public sealed class InstallManifest
             throw CannotRead(path, "'installed' must be an array");
         }
 
+        var claimedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (var entryIndex = 0; entryIndex < manifest.Installed.Count; entryIndex++)
         {
             var entry = manifest.Installed[entryIndex];
@@ -127,10 +129,39 @@ public sealed class InstallManifest
                         path,
                         $"'installed[{entryIndex}].skills[{skillIndex}]' is not a safe skill folder name");
                 }
+
+                if (!claimedPaths.Add(entry.Skills[skillIndex]))
+                {
+                    throw CannotRead(path, $"the skill folder '{entry.Skills[skillIndex]}' is claimed more than once");
+                }
             }
         }
 
         return manifest;
+    }
+
+    private static void RejectDuplicateProperties(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var property in element.EnumerateObject())
+            {
+                if (!names.Add(property.Name))
+                {
+                    throw new JsonException($"Duplicate manifest property '{property.Name}'.");
+                }
+
+                RejectDuplicateProperties(property.Value);
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                RejectDuplicateProperties(item);
+            }
+        }
     }
 
     private static PackageSkillsException CannotRead(

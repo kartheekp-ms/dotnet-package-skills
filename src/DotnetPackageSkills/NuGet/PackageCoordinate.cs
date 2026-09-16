@@ -47,11 +47,7 @@ public sealed partial record PackageCoordinate(string Id, string Version)
             throw new PackageSkillsException($"'{input}' is missing a package id before the '{Separator}'.");
         }
 
-        if (!PackageIdPattern().IsMatch(id))
-        {
-            throw new PackageSkillsException(
-                $"'{id}' is not a valid package id. Ids contain only letters, digits, '.', '_' and '-'.");
-        }
+        ValidateId(id);
 
         if (version.Length == 0)
         {
@@ -77,6 +73,15 @@ public sealed partial record PackageCoordinate(string Id, string Version)
         return new PackageCoordinate(id, version);
     }
 
+    internal static void ValidateId(string id)
+    {
+        if (!PackageIdPattern().IsMatch(id))
+        {
+            throw new PackageSkillsException(
+                $"'{id}' is not a valid package id. Ids contain only letters, digits, '.', '_' and '-'.");
+        }
+    }
+
     /// <summary>Wildcards and NuGet interval notation: <c>4.*</c>, <c>[1.0,2.0)</c>, <c>(,3.0]</c>.</summary>
     private static readonly char[] RangeCharacters = ['*', '[', ']', '(', ')', ','];
 
@@ -84,7 +89,7 @@ public sealed partial record PackageCoordinate(string Id, string Version)
 
     public override string ToString() => $"{Id}{Separator}{Version}";
 
-    [GeneratedRegex(@"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$")]
+    [GeneratedRegex(@"^[A-Za-z0-9_]([A-Za-z0-9._-]*[A-Za-z0-9_])?$")]
     private static partial Regex PackageIdPattern();
 
     [GeneratedRegex(@"^\d+(\.\d+){0,3}(-[0-9A-Za-z][0-9A-Za-z.-]*)?(\+[0-9A-Za-z][0-9A-Za-z.-]*)?$")]

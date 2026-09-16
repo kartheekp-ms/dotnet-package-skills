@@ -67,6 +67,8 @@ unreadable manifest as empty. Empty means the existing folders are user-owned; c
 ownership is unknown. `install` and `uninstall` must fail before changing anything and preserve the
 file so the user can repair or restore it. `list` may still run because it does not read ownership
 or write anything.
+An existing manifest must contain `installed`, and JSON properties and case-insensitive
+destination claims must be unique.
 
 **No tracked skills means no manifest and no folder.** When the last entry goes, `install` and
 `uninstall` both delete `.dotnet-package-skills.json` and drop the destination folder if it is
@@ -84,11 +86,10 @@ rule so users can make an informed selection. Regular reports, JSON, and manifes
 **Skill names from packages are untrusted input.** They become path segments in the user's repo.
 `SkillDiscovery.IsSafeSkillName` is the gate; keep it strict.
 
-**Only a target licenses pruning.** `--target` describes a complete set of packages, so anything
-missing from it is genuinely no longer referenced. `--package` names a few packages and says
-nothing about the rest, so it copies additively — see the `prune` parameter on
-`SkillInstaller.Install`. Getting this backwards would delete a user's other skills the first time
-they installed a single package.
+**Only complete, noninteractive target discovery licenses automatic pruning.** `--package` says
+nothing about unrelated installed skills, and an interactive picker may remove only explicitly
+deselected rows. A missing resolved target package stops installation before any writes, including
+previews; an incomplete cache must never look like permission to delete skills.
 
 **A deselection removes; an omission does not.** `--interactive` hands `SkillInstaller.Install` a
 `deselected` set of destination paths, and those go even when `prune` is false. That is not a hole
@@ -144,6 +145,15 @@ process mid-frame, so the restore never runs and the user is left typing into a 
 cursor. Taken as a key it cancels through the same path as `esc`. Note the modifier is tested
 before the switch, because a bare `c` clears the selection.
 
+**Retained copies stay checked until explicitly deselected.** Target-based install pickers include
+manifest-owned skills no longer supplied by the target, even when discovery has zero candidates.
+Their descriptions come from the installed copies. Ownership snapshots are rechecked before
+applying an interactive choice; concurrent ownership changes invalidate it rather than changing
+which package's files are affected.
+Hold the destination lock from ownership loading through the final manifest write. Both
+installation and uninstallation participate, so another tool invocation cannot change ownership
+between the check and mutation. Canonicalize destination aliases before choosing the lock.
+
 **Resizing invalidates an in-progress frame.** Read width and height together, restart a redraw
 if its viewport changes, and clear cells in place rather than scrolling blank lines. Otherwise
 old picker copies accumulate in terminal history and can wrap incorrectly when the host resizes.
@@ -176,8 +186,17 @@ do not create destination path segments. A skill must be an immediate subdirecto
 **Collisions warn and skip; they never overwrite silently.** Destination names compare
 case-insensitively. Package enumeration and skill discovery stay deterministic so the first match
 wins reproducibly. An existing untracked destination folder is user-owned and untouchable.
+Different packages cannot transfer an already-tracked destination between owners in any install
+mode. A skipped conflicting path is protected from pruning as well as copying. Same-package
+version refreshes remain allowed.
+Keep all discovery candidates internally until install-time ownership is known. Prefer the
+current owner's candidate; `list` remains a destination-independent discovery report.
 Package authors avoid collisions by prefixing skill folders with their lowercased package ID, but
 the tool does not enforce that naming convention.
+
+**Package filters must not broaden destructive operations.** An explicitly blank filter is an
+error; only an absent `--package` means all packages. Interactive and noninteractive uninstall
+use the same normalized version matcher.
 
 **Side-by-side package versions are not represented in the destination.** Repositories are expected
 to align package versions with NuGet Central Package Management. `PackageLister.Parse` still keeps

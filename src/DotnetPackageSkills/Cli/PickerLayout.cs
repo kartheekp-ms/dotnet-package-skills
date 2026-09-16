@@ -230,14 +230,15 @@ internal sealed class PickerLayout
 
     private static string DescriptionFor(SkillPickerItem item)
     {
+        var prefix = item.Retained ? "Installed copy; kept unless you uncheck it. " : string.Empty;
         if (!string.IsNullOrWhiteSpace(item.DescriptionWarning))
         {
             var warning = TerminalText.Sanitize(item.DescriptionWarning);
-            return $"Description unavailable: {(TerminalText.Width(warning) > 0 ? warning : "unreadable metadata.")}";
+            return $"{prefix}Description unavailable: {(TerminalText.Width(warning) > 0 ? warning : "unreadable metadata.")}";
         }
 
         var description = TerminalText.Sanitize(item.Description, multiline: true);
-        return TerminalText.Width(description) > 0 ? description : "No description provided.";
+        return prefix + (TerminalText.Width(description) > 0 ? description : "No description provided.");
     }
 
     private static IReadOnlyList<string> Header(string title, int page, int pages, int width)

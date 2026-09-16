@@ -13,7 +13,7 @@ public class InteractiveSkillsTests
         var second = Skill(temp, "second", "The second package skill.");
         var source = File.ReadAllBytes(Path.Combine(first.SourcePath, "SKILL.md"));
 
-        var items = InteractiveSkills.ForInstall([first, second], Names("SECOND"));
+        var items = InteractiveSkills.ForInstall([first, second], Owners("SECOND"), temp.Combine("destination"));
 
         Assert.Collection(
             items,
@@ -70,22 +70,15 @@ public class InteractiveSkillsTests
         File.WriteAllText(Path.Combine(missing.SourcePath, "SKILL.md"), "# No frontmatter\n");
         File.WriteAllText(Path.Combine(malformed.SourcePath, "SKILL.md"), "---\ndescription: [broken\n---\n");
 
-        var items = InteractiveSkills.ForInstall([missing, malformed], Names());
+        var items = InteractiveSkills.ForInstall([missing, malformed], [], temp.Combine("destination"));
 
-        Assert.Collection(
-            items,
-            item =>
-            {
-                Assert.Equal("missing", item.Name);
-                Assert.Null(item.Description);
-                Assert.Null(item.DescriptionWarning);
-            },
-            item =>
-            {
-                Assert.Equal("malformed", item.Name);
-                Assert.Null(item.Description);
-                Assert.False(string.IsNullOrWhiteSpace(item.DescriptionWarning));
-            });
+        Assert.Equal(2, items.Count);
+        var absent = Assert.Single(items, item => item.Name == "missing");
+        Assert.Null(absent.Description);
+        Assert.Null(absent.DescriptionWarning);
+        var invalid = Assert.Single(items, item => item.Name == "malformed");
+        Assert.Null(invalid.Description);
+        Assert.False(string.IsNullOrWhiteSpace(invalid.DescriptionWarning));
     }
 
     [Fact]
@@ -137,7 +130,9 @@ public class InteractiveSkillsTests
         var installer = new SkillInstaller();
         installer.Install(destination, [shown, hidden], dryRun: false);
 
-        var choice = InteractiveSkills.InstallChoice([shown], Names("SHOWN", "hidden"), Names());
+        var installed = Owners("SHOWN", "hidden");
+        var items = InteractiveSkills.ForInstall([shown], installed, destination);
+        var choice = InteractiveSkills.InstallChoice([shown], installed, items, Names());
 
         Assert.Empty(choice.Selected);
         Assert.Equal("SHOWN", Assert.Single(choice.Deselected));
@@ -159,14 +154,86 @@ public class InteractiveSkillsTests
         var first = Skill(temp, "first", "One.");
         var second = Skill(temp, "second", "Two.");
 
+        var installed = Owners("first", "unshown");
+        var items = InteractiveSkills.ForInstall([first, second], installed, temp.Combine("destination"));
         var choice = InteractiveSkills.InstallChoice(
-            [first, second],
-            Names("first", "unshown"),
-            Names("FIRST", "second", "unknown"));
+            [first, second], installed, items, Names("FIRST", "second", "unknown"));
 
         Assert.Equal([first, second], choice.Selected);
         Assert.Empty(choice.Deselected);
     }
+
+    [Fact]
+    public void Another_packages_same_named_skill_is_not_offered_as_an_installed_candidate()
+    {
+        using var temp = new TempDirectory();
+        var candidate = Skill(temp, "shared", "A candidate from Example.Package.");
+        var installed = new[] { new TrackedSkill("Other.Package", "2.0.0", "shared") };
+
+        var items = InteractiveSkills.ForInstall([candidate], installed, temp.Combine("destination"));
+        var choice = InteractiveSkills.InstallChoice([candidate], installed, items, Names());
+
+        Assert.Empty(items);
+        Assert.Empty(choice.Selected);
+        Assert.Empty(choice.Deselected);
+    }
+
+    [Fact]
+    public void A_target_with_no_candidates_offers_installed_copies_checked_and_keeps_them()
+    {
+        using var temp = new TempDirectory();
+        var skill = Skill(temp, "stale", "The installed description.");
+        var destination = temp.Combine("destination");
+        new SkillInstaller().Install(destination, [skill], dryRun: false);
+        var installed = SkillInstallService.InstalledSkills(destination, temp.Path);
+        var manifest = File.ReadAllBytes(Path.Combine(destination, InstallManifest.FileName));
+        var items = InteractiveSkills.ForInstall([], installed, destination, includeRetained: true);
+        var terminal = new FakeTerminal(windowHeight: 24, windowWidth: 100).Press(ConsoleKey.Enter);
+
+        var selected = new SkillPicker(terminal).Choose(items, "Skills");
+        var choice = InteractiveSkills.InstallChoice([], installed, items, selected!);
+        new SkillInstaller().Install(
+            destination, choice.Selected, dryRun: false, prune: false, deselected: choice.Deselected,
+            expectedInstalled: choice.ExpectedInstalled);
+
+        var item = Assert.Single(items);
+        Assert.True(item.Installed);
+        Assert.True(item.Retained);
+        Assert.Equal("The installed description.", item.Description);
+        Assert.Contains("[x] stale", terminal.Frames[0]);
+        Assert.Contains("Installed copy; kept unless you uncheck it.", terminal.Frames[0]);
+        Assert.Contains("0 to remove", terminal.Frames[0]);
+        Assert.Empty(choice.Selected);
+        Assert.Empty(choice.Deselected);
+        Assert.Equal(manifest, File.ReadAllBytes(Path.Combine(destination, InstallManifest.FileName)));
+    }
+
+    [Fact]
+    public void A_retained_copy_is_removed_only_when_its_own_row_is_unchecked()
+    {
+        using var temp = new TempDirectory();
+        var skill = Skill(temp, "stale", "A retained skill.");
+        var destination = temp.Combine("destination");
+        var installer = new SkillInstaller();
+        installer.Install(destination, [skill], dryRun: false);
+        var installed = SkillInstallService.InstalledSkills(destination, temp.Path);
+        var items = InteractiveSkills.ForInstall([], installed, destination, includeRetained: true);
+        var terminal = new FakeTerminal(windowHeight: 24).Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
+        var selected = new SkillPicker(terminal).Choose(items, "Skills");
+        var choice = InteractiveSkills.InstallChoice([], installed, items, selected!);
+
+        var outcome = installer.Install(
+            destination, choice.Selected, dryRun: false, prune: false,
+            deselected: choice.Deselected, expectedInstalled: choice.ExpectedInstalled);
+
+        Assert.Contains("1 to remove", terminal.Frames[^1]);
+        Assert.Equal("stale", Assert.Single(choice.Deselected));
+        Assert.Equal("stale", Assert.Single(outcome.Removed).Skill);
+        Assert.False(Directory.Exists(Path.Combine(destination, "stale")));
+    }
+
+    private static IReadOnlyList<TrackedSkill> Owners(params string[] names) =>
+        [.. names.Select(name => new TrackedSkill("Example.Package", "1.0.0", name))];
 
     private static HashSet<string> Names(params string[] names) => new(names, StringComparer.OrdinalIgnoreCase);
 

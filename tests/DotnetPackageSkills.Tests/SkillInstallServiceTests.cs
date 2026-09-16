@@ -78,18 +78,169 @@ public class SkillInstallServiceTests
         Assert.True(File.Exists(temp.Combine(".agents", "skills", "mockly", "SKILL.md")));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Target_install_rejects_incomplete_discovery_before_changing_skills(bool dryRun)
+    {
+        using var temp = new TempDirectory();
+        temp.CreateFile("MyApp.sln");
+        temp.CreatePackageWithSkill("Existing", "1.0.0", "existing");
+        var initial = new SkillInstallService(new FakeDotnet(temp.Combine("packages"), Json(("Existing", "1.0.0"))));
+        initial.Install(Request(temp));
+        var manifestPath = temp.Combine(".agents", "skills", InstallManifest.FileName);
+        var before = File.ReadAllBytes(manifestPath);
+
+        var runner = new FakeDotnet(temp.Combine("packages"), Json(("Mockly", "1.10.0")));
+        var error = Assert.Throws<PackageSkillsException>(() =>
+            new SkillInstallService(runner).Install(Request(temp) with { DryRun = dryRun }));
+
+        Assert.Contains("Mockly 1.10.0", error.Message);
+        Assert.Contains("restore", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(before, File.ReadAllBytes(manifestPath));
+        Assert.True(File.Exists(temp.Combine(".agents", "skills", "existing", "SKILL.md")));
+    }
+
     [Fact]
-    public void Install_reports_packages_that_are_resolved_but_not_extracted()
+    public void Discovery_still_reports_missing_packages_without_installing()
     {
         using var temp = new TempDirectory();
         temp.CreateFile("MyApp.sln");
         temp.CreateDirectory("packages");
+        var service = new SkillInstallService(new FakeDotnet(temp.Combine("packages"), Json(("Missing", "1.0.0"))));
 
-        var runner = new FakeDotnet(temp.Combine("packages"), Json(("Mockly", "1.10.0")));
-        var result = new SkillInstallService(runner).Install(Request(temp));
+        var result = service.Discover(Request(temp));
 
-        Assert.Equal("Mockly 1.10.0", Assert.Single(result.NotOnDisk));
+        Assert.Equal("Missing 1.0.0", Assert.Single(result.NotOnDisk));
         Assert.Empty(result.Skills);
+        Assert.False(Directory.Exists(result.Destination));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Missing_target_packages_also_block_refreshing_available_skills(bool interactive)
+    {
+        using var temp = new TempDirectory();
+        temp.CreateFile("MyApp.sln");
+        var package = temp.CreatePackageWithSkill("Present", "1.0.0", "present");
+        new SkillInstallService(new FakeDotnet(temp.Combine("packages"), Json(("Present", "1.0.0"))))
+            .Install(Request(temp));
+        var destination = temp.Combine(".agents", "skills");
+        var previous = File.ReadAllBytes(Path.Combine(destination, "present", "SKILL.md"));
+        var manifest = File.ReadAllBytes(Path.Combine(destination, InstallManifest.FileName));
+        File.WriteAllText(Path.Combine(package, "skills", "present", "SKILL.md"), "new source content");
+        var service = new SkillInstallService(new FakeDotnet(
+            temp.Combine("packages"), Json(("Present", "1.0.0"), ("Missing", "2.0.0"))));
+        var discovered = service.Discover(Request(temp));
+
+        Assert.Throws<PackageSkillsException>(() =>
+        {
+            if (interactive)
+            {
+                service.PrepareInteractiveInstall(
+                    Request(temp), discovered, SkillInstallService.InstalledSkills(destination, temp.Path));
+            }
+            else
+            {
+                service.Install(Request(temp), discovered, null);
+            }
+        });
+
+        Assert.Equal(previous, File.ReadAllBytes(Path.Combine(destination, "present", "SKILL.md")));
+        Assert.Equal(manifest, File.ReadAllBytes(Path.Combine(destination, InstallManifest.FileName)));
+    }
+
+    [Fact]
+    public void Preparing_a_picker_excludes_conflicting_candidates_without_losing_the_warning()
+    {
+        using var temp = new TempDirectory();
+        temp.CreatePackageWithSkill("Alpha", "1.0.0", "shared");
+        temp.CreatePackageWithSkill("Beta", "2.0.0", "shared");
+        var service = new SkillInstallService(new FakeDotnet(temp.Combine("packages"), Json()));
+        service.Install(Request(temp) with { Packages = [PackageCoordinate.Parse("Alpha@1.0.0")] });
+        var request = Request(temp) with { Packages = [PackageCoordinate.Parse("Beta@2.0.0")] };
+        var discovered = service.Discover(request);
+        var installed = SkillInstallService.InstalledSkills(discovered.Destination, temp.Path);
+
+        var prepared = service.PrepareInteractiveInstall(request, discovered, installed);
+        var result = service.Install(request, prepared,
+            new SkillChoice([], []) { ExpectedInstalled = installed });
+
+        Assert.Empty(prepared.Skills);
+        Assert.Contains("Alpha", Assert.Single(result.Skipped).Reason);
+        Assert.Empty(result.Removed);
+        Assert.False(result.DryRun);
+        Assert.Equal("Alpha", Assert.Single(InstallManifest.Load(result.Destination).Installed).Package);
+    }
+
+    [Fact]
+    public void A_package_that_disappears_after_the_preview_also_blocks_acceptance()
+    {
+        using var temp = new TempDirectory();
+        temp.CreateFile("MyApp.sln");
+        temp.CreatePackageWithSkill("Present", "1.0.0", "present");
+        var emptyPackage = temp.CreateDirectory("packages", "empty", "1.0.0");
+        var service = new SkillInstallService(new FakeDotnet(
+            temp.Combine("packages"), Json(("Present", "1.0.0"), ("Empty", "1.0.0"))));
+        var discovered = service.Discover(Request(temp));
+        var prepared = service.PrepareInteractiveInstall(Request(temp), discovered, []);
+        Directory.Delete(emptyPackage);
+
+        var error = Assert.Throws<PackageSkillsException>(() =>
+            service.Install(Request(temp), prepared, new SkillChoice(prepared.Skills, [])));
+
+        Assert.Contains("Empty 1.0.0", error.Message);
+        Assert.False(Directory.Exists(prepared.Destination));
+    }
+
+    [Fact]
+    public void Installation_prefers_the_current_owners_upgrade_over_an_earlier_named_collision()
+    {
+        using var temp = new TempDirectory();
+        temp.CreateFile("MyApp.sln");
+        temp.CreatePackageWithSkill("Zeta", "1.0.0", "shared");
+        new SkillInstallService(new FakeDotnet(temp.Combine("packages"), Json(("Zeta", "1.0.0"))))
+            .Install(Request(temp));
+        temp.CreatePackageWithSkill("Alpha", "1.0.0", "shared");
+        var newer = temp.CreatePackageWithSkill("Zeta", "2.0.0", "shared");
+        File.WriteAllText(Path.Combine(newer, "skills", "shared", "SKILL.md"), "updated owner");
+        var service = new SkillInstallService(new FakeDotnet(
+            temp.Combine("packages"), Json(("Alpha", "1.0.0"), ("Zeta", "2.0.0"))));
+
+        var discovered = service.Discover(Request(temp));
+        Assert.Equal("Alpha", Assert.Single(discovered.Skills).PackageId);
+        var installed = SkillInstallService.InstalledSkills(discovered.Destination, temp.Path);
+        var prepared = service.PrepareInteractiveInstall(Request(temp), discovered, installed);
+        var result = service.Install(Request(temp), prepared,
+            new SkillChoice(prepared.Skills, []) { ExpectedInstalled = installed });
+
+        Assert.Equal("Zeta", Assert.Single(prepared.Skills).PackageId);
+        Assert.Equal("Alpha", Assert.Single(result.Skipped).PackageId);
+        Assert.Empty(result.Removed);
+        Assert.Equal("updated owner", File.ReadAllText(Path.Combine(result.Destination, "shared", "SKILL.md")));
+        Assert.Equal("2.0.0", Assert.Single(InstallManifest.Load(result.Destination).Installed).Version);
+    }
+
+    [Fact]
+    public void Repeating_equivalent_package_coordinates_does_not_create_self_collisions()
+    {
+        using var temp = new TempDirectory();
+        temp.CreatePackageWithSkill("Alpha", "1.0.0", "alpha");
+        var service = new SkillInstallService(new FakeDotnet(temp.Combine("packages"), Json()));
+
+        var result = service.Install(Request(temp) with
+        {
+            Packages = [
+                PackageCoordinate.Parse("Alpha@1.0"),
+                PackageCoordinate.Parse("alpha@1.0.0"),
+                PackageCoordinate.Parse("Alpha@1.0.0.0"),
+            ],
+        });
+
+        Assert.Equal(1, result.PackagesScanned);
+        Assert.Single(result.Skills);
+        Assert.Empty(result.Skipped);
     }
 
     [Fact]
@@ -385,6 +536,33 @@ public class SkillInstallServiceTests
 
         Assert.Single(result.Skills);
         Assert.False(Directory.Exists(temp.Combine(".agents", "skills")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Interactive_target_selection_never_prunes_skills_that_were_not_deselected(bool noCandidates)
+    {
+        using var temp = new TempDirectory();
+        temp.CreateFile("MyApp.sln");
+        temp.CreatePackageWithSkill("Mockly", "1.10.0", "current", "stale");
+        var initial = new SkillInstallService(new FakeDotnet(temp.Combine("packages"), Json(("Mockly", "1.10.0"))));
+        initial.Install(Request(temp));
+        var service = noCandidates
+            ? new SkillInstallService(new FakeDotnet(temp.Combine("packages"), Json()))
+            : initial;
+        if (!noCandidates)
+        {
+            Directory.Delete(temp.Combine("packages", "mockly", "1.10.0", "skills", "stale"), recursive: true);
+        }
+
+        var discovered = service.Discover(Request(temp));
+        var result = service.Install(Request(temp), discovered, new SkillChoice(discovered.Skills, []));
+
+        Assert.Empty(result.Removed);
+        Assert.True(File.Exists(temp.Combine(".agents", "skills", "current", "SKILL.md")));
+        Assert.True(File.Exists(temp.Combine(".agents", "skills", "stale", "SKILL.md")));
+        Assert.Equal(2, InstallManifest.Load(result.Destination).EnumerateSkills().Count());
     }
 
     [Fact]
