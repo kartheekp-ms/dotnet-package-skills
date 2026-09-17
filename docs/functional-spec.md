@@ -169,16 +169,16 @@ Representative page after making a selection:
 Which skills should be installed? (App.slnx)  page 1 of 3
 
   [ ] contoso.widgets-testing - Test widget behavior in isolation.
-> [x] contoso.widgets-usage - Create and configure widgets safely.
+> [X] contoso.widgets-usage - Create and configure widgets safely.
       Use when managing widget lifetimes, retries, and batching.
-  [x] mockly-usage - Create test doubles and verify interactions.
+  [X] mockly-usage - Create test doubles and verify interactions.
 
 2 of 12 selected; 1 to install; 1 to remove
 (Press <space> to select, <enter> to accept)
 (Press <up>/<down> to move, <Home>/<End> for first/last)
 (Press <left>/<right>, <PageUp>/<PageDown> to change page)
 (Press <a> to select all, <c> to clear all, <Esc>/<q>/<Ctrl+C> to cancel)
-Green: install Red: remove
+Blue X: selected Red brackets: remove
 ```
 
 In this example, `contoso.widgets-usage` is new, `mockly-usage` is already installed, and the previously installed testing skill has been unchecked.
@@ -193,12 +193,14 @@ In this example, `contoso.widgets-usage` is new, `mockly-usage` is already insta
 - Descriptions wrap beneath the skill text with a small list indent, using the available width. Page sizes reflect rendered lines, not a fixed number of skills. A list that fits needs no paging.
 - Live resizing recalculates wrapping and pagination while preserving focus and selection. Oversized descriptions can be scrolled while their skill row remains visible.
 
+The live checklist is displayed in a temporary terminal screen, separate from the shell's scrollback. On acceptance, cancellation, or a handled error, the original shell screen is restored and receives the final report. The checklist itself is not retained in normal history, preventing host-driven resize reflow from leaving duplicate headings or partial old frames.
+
 | Visual cue | Meaning |
 | --- | --- |
-| Blue `>` | Keyboard focus; independent of the pending action. |
-| Green skill name/checkbox | Will be installed. |
-| Red skill name/checkbox | Will be removed. |
-| Normal text | No pending addition/removal. Descriptions remain neutral. |
+| Blue row text | Keyboard focus, including the skill name and wrapped description lines. |
+| Blue `X` | Checked item: install/keep in the install picker, or remove in the uninstall picker. |
+| Red `[` and `]` | Pending removal. Brackets stay red even when the focused row's other text is blue. |
+| Normal name/description text | Item is not focused; selection does not turn its name green or red. |
 | `+` / `-` when color is disabled | Pending installation/removal. `NO_COLOR` is honored. |
 
 | Key | Behavior |
@@ -257,14 +259,14 @@ The interactive picker lists only manifest-owned skills and reads descriptions f
 ```text
 Which skills should be uninstalled?
 
-> [x] contoso.widgets-usage - Create and configure widgets safely.
+> [X] contoso.widgets-usage - Create and configure widgets safely.
   [ ] mockly-usage - Create test doubles and verify interactions.
 
 1 of 2 selected; 1 to remove
 (Press <space> to select, <enter> to accept)
 (Press <up>/<down> to move, <Home>/<End> for first/last)
 (Press <a> to select all, <c> to clear all, <Esc>/<q>/<Ctrl+C> to cancel)
-Red: remove
+Blue X: selected Red brackets: remove
 ```
 
 Accepting removes only the checked skill. If ownership changes while the picker is open or while waiting for another operation, acceptance fails without applying that stale selection. A missing installed `SKILL.md` does not prevent removing its tracked folder. With no tracked skills, the command succeeds without opening a picker:
@@ -371,7 +373,7 @@ Example: `dotnet package-skills uninstall --package Mockly --json`
 | A destination name conflicts with another skill, an untracked folder, or a different installed owner | Warn and skip the conflicting copy. Preserve the current owner, including during target-based cleanup. |
 | A package filter is explicitly blank or missing its value | Fail; never broaden a selective uninstall to all tracked skills. |
 | The ownership manifest is absent | Existing folders are not assumed to belong to the tool. |
-| The ownership manifest is unreadable, malformed, or unsafe | Fail before modifying destination skills; preserve the manifest and explain how to repair/restore it. Missing ownership data, duplicate JSON properties, and duplicate case-insensitive skill claims are invalid. `list` remains available. |
+| The ownership manifest is unreadable, malformed, or unsafe | Fail before modifying destination skills; preserve the manifest and explain how to repair/restore it. Missing ownership data, duplicate JSON properties, duplicate case-insensitive skill claims, and unsafe skill folder names are invalid. Names ending in a dot or space, including `...`, are rejected because Windows can resolve them to another folder or the destination itself. This also applies to interactive and dry-run modes. `list` remains available. |
 | Invalid option combination, missing target, failed restore, or filesystem error | Report an actionable error and return a non-zero exit code. |
 
 The manifest is written after successful installation, not by `list`, a cancelled picker, or a dry run. Removing the last tracked entry deletes the manifest. The destination folder is deleted only if it is empty; hand-written skills keep that folder alive. Removing a tracking entry is reported even when its skill folder had already been deleted.

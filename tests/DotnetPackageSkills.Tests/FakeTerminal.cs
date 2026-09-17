@@ -16,7 +16,7 @@ internal sealed record TerminalWrite(
 /// <summary>A cell-addressed screen, scripted keys/resizes, and the styles of individual writes.</summary>
 internal sealed class FakeTerminal(int windowHeight = 18, int windowWidth = 100) : ITerminal
 {
-    private readonly List<List<string?>> _screen = [];
+    private List<List<string?>> _screen = [];
     private readonly List<string> _frames = [];
     private readonly List<TerminalWrite> _writes = [];
     private readonly List<IReadOnlyList<TerminalWrite>> _frameWrites = [];
@@ -50,6 +50,16 @@ internal sealed class FakeTerminal(int windowHeight = 18, int windowWidth = 100)
     public Encoding OutputEncoding { get; set; } = Encoding.ASCII;
 
     public int ViewportClears { get; private set; }
+
+    public bool IsInteractiveScreen { get; private set; }
+
+    public int ScreenEntries { get; private set; }
+
+    public int ScreenExits { get; private set; }
+
+    public string LastPickerScreen { get; private set; } = string.Empty;
+
+    public int LastPickerCursorTop { get; private set; }
 
     public Action<string>? BeforeOperation { get; set; }
 
@@ -107,6 +117,44 @@ internal sealed class FakeTerminal(int windowHeight = 18, int windowWidth = 100)
         EncodingChanges.Add(OutputEncoding);
     }
 
+    public IDisposable EnterInteractiveScreen()
+    {
+        BeforeOperation?.Invoke(nameof(EnterInteractiveScreen));
+        var previous = _screen;
+        var previousTop = _cursorTop;
+        var previousLeft = _cursorLeft;
+        var wasInteractive = IsInteractiveScreen;
+        _screen = [];
+        _cursorTop = 0;
+        _cursorLeft = 0;
+        IsInteractiveScreen = true;
+        ScreenEntries++;
+        return new ScreenScope(() =>
+        {
+            LastPickerScreen = Screen;
+            LastPickerCursorTop = _cursorTop;
+            _screen = previous;
+            _cursorTop = Math.Clamp(previousTop, 0, WindowHeight - 1);
+            _cursorLeft = Math.Clamp(previousLeft, 0, WindowWidth - 1);
+            IsInteractiveScreen = wasInteractive;
+            ScreenExits++;
+        });
+    }
+
+    private sealed class ScreenScope(Action restore) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                _disposed = true;
+                restore();
+            }
+        }
+    }
+
     public void RestoreState(TerminalState state)
     {
         CurrentStyle = state.Style;
@@ -128,7 +176,7 @@ internal sealed class FakeTerminal(int windowHeight = 18, int windowWidth = 100)
             Foreground = style switch
             {
                 TerminalStyle.Focus => ConsoleColor.Blue,
-                TerminalStyle.Install => ConsoleColor.Green,
+                TerminalStyle.Selected => ConsoleColor.Blue,
                 TerminalStyle.Remove => ConsoleColor.Red,
                 TerminalStyle.Muted => ConsoleColor.DarkGray,
                 _ => ConsoleColor.Gray,

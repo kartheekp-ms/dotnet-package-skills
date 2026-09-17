@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "description": "Terminal-emulator regression support for the .NET skill picker",
+  "devDependencies": {
+    "@xterm/headless": "5.5.0"
+  }
+}

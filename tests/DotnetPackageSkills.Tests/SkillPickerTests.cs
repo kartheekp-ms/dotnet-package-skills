@@ -8,6 +8,73 @@ public class SkillPickerTests
 {
     private const string Title = "Skills for App.slnx";
 
+    [Theory]
+    [InlineData(ConsoleKey.Enter)]
+    [InlineData(ConsoleKey.Escape)]
+    [InlineData(ConsoleKey.Q)]
+    public void Picker_frames_are_isolated_from_prior_shell_output_and_removed_on_exit(ConsoleKey exit)
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, exit);
+        terminal.WriteLine("earlier shell output");
+        var before = terminal.Screen;
+        var cursor = terminal.CursorTop;
+        var state = terminal.CaptureState();
+        terminal.BeforeOperation = operation =>
+        {
+            if (operation == nameof(FakeTerminal.ReadKey))
+            {
+                Assert.True(terminal.IsInteractiveScreen);
+                Assert.DoesNotContain("earlier shell output", terminal.Screen);
+            }
+        };
+
+        new SkillPicker(terminal).Choose(Items(3), Title);
+
+        Assert.Equal(before, terminal.Screen);
+        Assert.Equal(cursor, terminal.CursorTop);
+        Assert.Equal(state, terminal.CaptureState());
+        Assert.Contains(Title, terminal.LastPickerScreen);
+        Assert.DoesNotContain(Title, terminal.Screen);
+        Assert.Equal(1, terminal.ScreenEntries);
+        Assert.Equal(1, terminal.ScreenExits);
+        Assert.False(terminal.IsInteractiveScreen);
+    }
+
+    [Fact]
+    public void Ctrl_C_restores_the_normal_screen_without_retaining_a_picker_copy()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.A).PressWith(ConsoleModifiers.Control, ConsoleKey.C);
+        terminal.WriteLine("prior output");
+        var before = terminal.Screen;
+
+        Assert.Null(new SkillPicker(terminal).Choose(Items(24), Title));
+
+        Assert.Equal(before, terminal.Screen);
+        Assert.False(terminal.IsInteractiveScreen);
+        Assert.Equal(1, terminal.ScreenExits);
+    }
+
+    [Fact]
+    public void Rendering_failure_still_restores_the_original_screen()
+    {
+        var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar);
+        terminal.WriteLine("prior output");
+        var before = terminal.Screen;
+        terminal.BeforeOperation = operation =>
+        {
+            if (operation == nameof(FakeTerminal.Write) && terminal.CurrentStyle == TerminalStyle.Selected)
+            {
+                throw new IOException("failed during selection render");
+            }
+        };
+
+        Assert.Throws<IOException>(() => new SkillPicker(terminal).Choose(Items(3), Title));
+
+        Assert.Equal(before, terminal.Screen);
+        Assert.False(terminal.IsInteractiveScreen);
+        Assert.Equal(1, terminal.ScreenExits);
+    }
+
     [Fact]
     public void Picker_shows_one_page_of_skills_at_a_time()
     {
@@ -31,10 +98,11 @@ public class SkillPickerTests
 
         var frame = terminal.Frames[0];
         Assert.Contains("[ ] skill-01", frame);
-        Assert.Contains("[x] skill-02", frame);
+        Assert.Contains("[X] skill-02", frame);
         Assert.DoesNotContain("installed", frame);
-        Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 0, 1).Style);
+        Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 0, 1).Style);
         Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 0, 2).Style);
+        Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 0, 2, "X").Style);
     }
 
     [Fact]
@@ -47,31 +115,36 @@ public class SkillPickerTests
         var rows = Rows(terminal.Frames[0]);
 
         Assert.Equal("[ ] skill-01 - No description provided.", rows[0]);
-        Assert.Equal("[x] skill-02 - No description provided.", rows[1]);
+        Assert.Equal("[X] skill-02 - No description provided.", rows[1]);
     }
 
     [Fact]
-    public void Ticking_a_new_skill_colors_its_checkbox_and_name_green()
+    public void Ticking_a_new_skill_colors_only_its_X_blue_when_it_is_not_focused()
     {
-        var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
+        var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.DownArrow, ConsoleKey.Enter);
 
         new SkillPicker(terminal).Choose(Items(3), Title);
 
-        Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 0, 1).Style);
-        Assert.Equal(TerminalStyle.Install, SkillSpan(terminal, 1, 1).Style);
-        Assert.Equal("[x] skill-01 - No description provided.", Rows(terminal.Frames[1])[0]);
+        Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 0, 1).Style);
+        Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 2, 1, "X").Style);
+        Assert.Equal(TerminalStyle.Default, CheckboxSpan(terminal, 2, 1, "[").Style);
+        Assert.Equal(TerminalStyle.Default, CheckboxSpan(terminal, 2, 1, "]").Style);
+        Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 2, 1).Style);
+        Assert.Equal("[X] skill-01 - No description provided.", Rows(terminal.Frames[1])[0]);
         Assert.DoesNotContain("will install", terminal.Frames[1]);
     }
 
     [Fact]
-    public void Unticking_an_installed_skill_colors_its_checkbox_and_name_red()
+    public void Unticking_an_installed_skill_colors_its_brackets_red_not_its_name()
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
 
         new SkillPicker(terminal).Choose(Items(3, installed: [1]), Title);
 
-        Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 0, 1).Style);
-        Assert.Equal(TerminalStyle.Remove, SkillSpan(terminal, 1, 1).Style);
+        Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 0, 1).Style);
+        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 1, 1, "[").Style);
+        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 1, 1, "]").Style);
+        Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 1, 1).Style);
         Assert.Equal("[ ] skill-01 - No description provided.", Rows(terminal.Frames[1])[0]);
         Assert.DoesNotContain("will remove", terminal.Frames[1]);
     }
@@ -83,10 +156,11 @@ public class SkillPickerTests
 
         new SkillPicker(terminal).Choose(Items(3, installed: [1]), Title);
 
-        Assert.Equal(TerminalStyle.Remove, SkillSpan(terminal, 1, 1).Style);
-        Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 2, 1).Style);
+        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 1, 1, "[").Style);
+        Assert.Equal(TerminalStyle.Focus, CheckboxSpan(terminal, 2, 1, "[").Style);
+        Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 2, 1, "X").Style);
         Assert.Contains("0 to remove", terminal.Frames[2]);
-        Assert.Equal("[x] skill-01 - No description provided.", Rows(terminal.Frames[2])[0]);
+        Assert.Equal("[X] skill-01 - No description provided.", Rows(terminal.Frames[2])[0]);
     }
 
     [Fact]
@@ -111,8 +185,13 @@ public class SkillPickerTests
 
     private static TerminalWrite SkillSpan(FakeTerminal terminal, int frame, int skill) =>
         Assert.Single(terminal.FrameWrites[frame], write =>
-            write.Text.StartsWith("[", StringComparison.Ordinal) &&
-            write.Text.EndsWith($" skill-{skill:00}", StringComparison.Ordinal));
+            write.Text == $" skill-{skill:00}");
+
+    private static TerminalWrite CheckboxSpan(FakeTerminal terminal, int frame, int skill, string part)
+    {
+        var row = SkillSpan(terminal, frame, skill).Top;
+        return Assert.Single(terminal.FrameWrites[frame], write => write.Top == row && write.Text == part);
+    }
 
     /// <summary>
     /// Installed skills the user left unticked, which is what install treats as a removal.
@@ -149,8 +228,11 @@ public class SkillPickerTests
             .Choose(Items(3, installed: [1, 2, 3]), Title, PickerMode.Uninstall);
 
         Assert.Equal("skill-01", Assert.Single(choice!));
-        Assert.Equal("[x] skill-01 - No description provided.", Rows(terminal.Frames[1])[0]);
-        Assert.Equal(TerminalStyle.Remove, SkillSpan(terminal, 1, 1).Style);
+        Assert.Equal("[X] skill-01 - No description provided.", Rows(terminal.Frames[1])[0]);
+        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 1, 1, "[").Style);
+        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 1, 1, "]").Style);
+        Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 1, 1, "X").Style);
+        Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 1, 1).Style);
     }
 
     [Fact]
@@ -164,7 +246,7 @@ public class SkillPickerTests
         Assert.DoesNotContain("installed", frame);
         Assert.DoesNotContain("will install", frame);
         Assert.Equal("[ ] skill-01 - No description provided.", Rows(frame)[0]);
-        Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 0, 1).Style);
+        Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 0, 1).Style);
     }
 
     [Fact]
@@ -410,7 +492,7 @@ public class SkillPickerTests
     }
 
     [Fact]
-    public void Cancelling_on_a_partial_page_leaves_the_cursor_under_the_footer()
+    public void Cancelling_on_a_partial_page_parks_the_picker_then_restores_the_shell_cursor()
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.RightArrow);
         terminal.PressWith(ConsoleModifiers.Control, ConsoleKey.C);
@@ -418,7 +500,8 @@ public class SkillPickerTests
         new SkillPicker(terminal).Choose(Items(12), Title);
 
         // Four complete entries, nine measured chrome rows, and the closing blank line.
-        Assert.Equal(14, terminal.FinalCursorTop);
+        Assert.Equal(14, terminal.LastPickerCursorTop);
+        Assert.Equal(0, terminal.FinalCursorTop);
     }
 
     [Fact]
@@ -445,13 +528,14 @@ public class SkillPickerTests
     }
 
     [Fact]
-    public void Cancelling_on_a_full_page_leaves_the_cursor_in_the_safety_row()
+    public void Cancelling_on_a_full_page_restores_the_original_screen_cursor()
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.Escape);
 
         new SkillPicker(terminal).Choose(Items(12), Title);
 
-        Assert.Equal(17, terminal.FinalCursorTop);
+        Assert.Equal(17, terminal.LastPickerCursorTop);
+        Assert.Equal(0, terminal.FinalCursorTop);
     }
 
     [Fact]
@@ -919,10 +1003,10 @@ public class SkillPickerTests
             [new SkillPickerItem("alpha", "Pkg", "1.2.3", true, "Short description.")], Title, mode);
 
         var row = Assert.Single(Rows(terminal.Frames[0]));
-        Assert.Equal($"[{(uninstall ? ' ' : 'x')}] alpha - Short description.", row);
+        Assert.Equal($"[{(uninstall ? ' ' : 'X')}] alpha - Short description.", row);
         var description = Assert.Single(terminal.FrameWrites[0], write => write.Text == " - Short description.");
         Assert.Equal(11, description.Left);
-        Assert.Equal(TerminalStyle.Default, description.Style);
+        Assert.Equal(TerminalStyle.Focus, description.Style);
         Assert.Equal(1, terminal.Frames[0].Split("Short description.", StringSplitOptions.None).Length - 1);
         Assert.DoesNotContain("will install", row);
         Assert.DoesNotContain("will remove", row);
@@ -1052,32 +1136,68 @@ public class SkillPickerTests
 
         Assert.Equal("skill-01", Assert.Single(chosen!));
         Assert.Contains("1 of 3 selected; 1 to install; 1 to remove", terminal.Frames[^1]);
-        Assert.Equal(TerminalStyle.Install, SkillSpan(terminal, 3, 1).Style);
-        Assert.Equal(TerminalStyle.Remove, SkillSpan(terminal, 3, 2).Style);
+        Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 3, 1).Style);
+        Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 3, 1, "X").Style);
+        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 3, 2, "[").Style);
+        Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 3, 2).Style);
         Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 3, 3).Style);
     }
 
     [Fact]
-    public void Blue_focus_is_a_separate_span_and_never_overrides_action_colors()
+    public void Blue_focus_covers_the_row_but_pending_removal_brackets_stay_red()
     {
         var terminal = new FakeTerminal()
             .Press(ConsoleKey.Spacebar, ConsoleKey.DownArrow, ConsoleKey.Spacebar, ConsoleKey.UpArrow, ConsoleKey.Enter);
 
         new SkillPicker(terminal).Choose(Items(3, installed: [2]), Title);
 
-        Assert.Equal(TerminalStyle.Install, SkillSpan(terminal, 1, 1).Style);
-        Assert.Equal(TerminalStyle.Install, SkillSpan(terminal, 2, 1).Style);
-        Assert.Equal(TerminalStyle.Remove, SkillSpan(terminal, 3, 2).Style);
-        Assert.Equal(TerminalStyle.Install, SkillSpan(terminal, 4, 1).Style);
-        Assert.Equal(TerminalStyle.Remove, SkillSpan(terminal, 4, 2).Style);
+        Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 1, 1).Style);
+        Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 2, 1).Style);
+        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 3, 2, "[").Style);
+        Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 4, 1).Style);
+        Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 4, 2).Style);
+        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 4, 2, "]").Style);
         Assert.All(terminal.FrameWrites, writes =>
         {
-            var focus = Assert.Single(writes, write => write.Style == TerminalStyle.Focus);
-            Assert.Equal(">", focus.Text);
+            var focus = Assert.Single(writes, write => write.Text == ">");
+            Assert.Equal(TerminalStyle.Focus, focus.Style);
             Assert.Equal(0, focus.Left);
             Assert.All(writes.Where(write => write.Text.StartsWith(" - ", StringComparison.Ordinal)),
-                write => Assert.Equal(TerminalStyle.Default, write.Style));
+                write => Assert.Equal(write.Top == focus.Top ? TerminalStyle.Focus : TerminalStyle.Default, write.Style));
         });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Focus_colors_every_wrapped_line_and_clears_from_the_previous_skill(bool uninstall)
+    {
+        var terminal = new FakeTerminal(windowHeight: 30, windowWidth: 80)
+            .Press(ConsoleKey.DownArrow, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(
+            [
+                new SkillPickerItem("alpha", "Pkg", "1", uninstall, "First line.\nSecond line.\nThird line."),
+                new SkillPickerItem("beta", "Pkg", "1", uninstall, "Another line.\nAnother continuation."),
+            ],
+            Title, uninstall ? PickerMode.Uninstall : PickerMode.Install);
+
+        var alpha = Assert.Single(terminal.FrameWrites[0], write => write.Text == " alpha").Top;
+        var beta = Assert.Single(terminal.FrameWrites[0], write => write.Text == " beta").Top;
+        Assert.Equal(3, beta - alpha);
+        for (var frame = 0; frame < 2; frame++)
+        {
+            Assert.All(
+                terminal.FrameWrites[frame].Where(write => write.Top >= alpha && write.Top < beta &&
+                    !string.IsNullOrWhiteSpace(write.Text)),
+                write => Assert.Equal(frame == 0 ? TerminalStyle.Focus : TerminalStyle.Default, write.Style));
+            Assert.All(
+                terminal.FrameWrites[frame].Where(write => write.Top >= beta && write.Top < beta + 2 &&
+                    !string.IsNullOrWhiteSpace(write.Text)),
+                write => Assert.Equal(frame == 1 ? TerminalStyle.Focus : TerminalStyle.Default, write.Style));
+        }
+
+        AssertWithinWindow(terminal);
     }
 
     [Fact]
@@ -1087,8 +1207,9 @@ public class SkillPickerTests
 
         new SkillPicker(terminal).Choose(Items(3), Title);
 
-        Assert.Equal(TerminalStyle.Install, SkillSpan(terminal, 1, 1).Style);
-        Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 2, 1).Style);
+        Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 1, 1, "X").Style);
+        Assert.DoesNotContain(terminal.FrameWrites[2], write => write.Text == "X");
+        Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 2, 1).Style);
         Assert.Contains("0 to install; 0 to remove", terminal.Frames[2]);
     }
 
@@ -1100,8 +1221,9 @@ public class SkillPickerTests
         var chosen = new SkillPicker(terminal).Choose(Items(3, installed: [1, 2, 3]), Title, PickerMode.Uninstall);
 
         Assert.Empty(chosen!);
-        Assert.Equal(TerminalStyle.Remove, SkillSpan(terminal, 1, 1).Style);
-        Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 2, 1).Style);
+        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 1, 1, "[").Style);
+        Assert.Equal(TerminalStyle.Focus, CheckboxSpan(terminal, 2, 1, "[").Style);
+        Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 2, 1).Style);
         Assert.Contains("0 of 3 selected; 0 to remove", terminal.Frames[2]);
     }
 
@@ -1115,11 +1237,11 @@ public class SkillPickerTests
 
         Assert.Equal("skill-01", Assert.Single(chosen!));
         Assert.Contains(">   [ ] skill-01", terminal.Frames[0]);
-        Assert.Contains("> + [x] skill-01", terminal.Frames[1]);
-        Assert.Contains("  + [x] skill-03", terminal.Frames[1]);
-        Assert.DoesNotContain("  + [x] skill-02", terminal.Frames[1]);
+        Assert.Contains("> + [X] skill-01", terminal.Frames[1]);
+        Assert.Contains("  + [X] skill-03", terminal.Frames[1]);
+        Assert.DoesNotContain("  + [X] skill-02", terminal.Frames[1]);
         Assert.Contains("  - [ ] skill-02", terminal.Frames[2]);
-        Assert.Contains("> + [x] skill-01", terminal.Frames[3]);
+        Assert.Contains("> + [X] skill-01", terminal.Frames[3]);
         Assert.Contains("  - [ ] skill-02", terminal.Frames[3]);
         Assert.Contains("+ install", terminal.Frames[3]);
         Assert.Contains("- remove", terminal.Frames[3]);
@@ -1140,9 +1262,9 @@ public class SkillPickerTests
         var chosen = new SkillPicker(terminal).Choose(Items(3, installed: [1, 2, 3]), Title, PickerMode.Uninstall);
 
         Assert.Empty(chosen!);
-        Assert.Contains("> - [x] skill-01", terminal.Frames[1]);
+        Assert.Contains("> - [X] skill-01", terminal.Frames[1]);
         Assert.Contains(">   [ ] skill-01", terminal.Frames[2]);
-        Assert.Contains("  - [x] skill-03", terminal.Frames[3]);
+        Assert.Contains("  - [X] skill-03", terminal.Frames[3]);
         Assert.Contains("    [ ] skill-03", terminal.Frames[4]);
         Assert.All(terminal.StyleEvents, style => Assert.Equal(TerminalStyle.Default, style));
         Assert.All(terminal.Frames, frame =>
@@ -1191,8 +1313,8 @@ public class SkillPickerTests
         Assert.Equal(Enumerable.Range(12, 3).Select(number => $"skill-{number:00}"), FrameSkillNames(terminal.Frames[7]));
         Assert.Contains("> [ ] skill-10", terminal.Frames[5]);
         Assert.Contains("> [ ] skill-14", terminal.Frames[7]);
-        Assert.Contains("> [x] skill-10", terminal.Frames[8]);
-        Assert.Contains("> [x] skill-04", terminal.Frames[9]);
+        Assert.Contains("> [X] skill-10", terminal.Frames[8]);
+        Assert.Contains("> [X] skill-04", terminal.Frames[9]);
         Assert.Contains("desc-06-2", terminal.Frames[0]);
         Assert.DoesNotContain("desc-07-1", terminal.Frames[0]);
         Assert.Contains("desc-09-5", terminal.Frames[5]);
@@ -1219,8 +1341,8 @@ public class SkillPickerTests
         Assert.All(terminal.Frames, frame => Assert.Equal(FrameSkillNames(terminal.Frames[0]), FrameSkillNames(frame)));
         Assert.Equal(Enumerable.Range(1, 5).Select(number => $"skill-{number:00}"), FrameSkillNames(terminal.Frames[0]));
         Assert.Equal(SkillSpan(terminal, 0, 1).Top, SkillSpan(terminal, 4, 1).Top);
-        Assert.Equal(TerminalStyle.Remove, SkillSpan(terminal, 1, 1).Style);
-        Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 2, 1).Style);
+        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 1, 1, "[").Style);
+        Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 2, 1).Style);
         AssertWithinWindow(terminal);
     }
 
@@ -1289,7 +1411,7 @@ public class SkillPickerTests
         }
 
         Assert.All(terminal.Frames.Take(164), frame => Assert.Contains("> [ ] alpha", frame));
-        Assert.Contains("> [x] alpha", terminal.Frames[164]);
+        Assert.Contains("> [X] alpha", terminal.Frames[164]);
         Assert.All(terminal.Frames, frame => Assert.Contains("<Ctrl+Up>/<Ctrl+Down>", frame));
         AssertWithinWindow(terminal);
     }
@@ -1326,11 +1448,11 @@ public class SkillPickerTests
         Assert.Equal(["skill-01", "skill-24"], chosen!);
         Assert.Equal(2, terminal.ViewportClears);
         Assert.Equal((46, 18), terminal.FrameSizes[6]);
-        Assert.Contains("> [x] skill-24", terminal.Frames[6]);
+        Assert.Contains("> [X] skill-24", terminal.Frames[6]);
         Assert.DoesNotContain("skill-01", terminal.Frames[6]);
         Assert.DoesNotContain("Package.24", terminal.Frames[6]);
-        Assert.Contains("> [x] skill-24 - No description provided.", terminal.Frames[7]);
-        Assert.Contains("[x] skill-01 - No description provided.", terminal.Frames[7]);
+        Assert.Contains("> [X] skill-24 - No description provided.", terminal.Frames[7]);
+        Assert.Contains("[X] skill-01 - No description provided.", terminal.Frames[7]);
         Assert.Equal(24, Rows(terminal.Frames[7]).Count);
         Assert.DoesNotContain("change page", terminal.Frames[7]);
         AssertWithinWindow(terminal);
@@ -1403,7 +1525,7 @@ public class SkillPickerTests
             .ResizeWhileWaiting(windowHeight: 18, windowWidth: 46)
             .WaitWithoutKey(times: 2)
             .Press(ConsoleKey.Enter);
-        var focused = color ? "> [x] skill-24" : uninstall ? "> - [x] skill-24" : "> + [x] skill-24";
+        var focused = color ? "> [X] skill-24" : uninstall ? "> - [X] skill-24" : "> + [X] skill-24";
         terminal.BeforeOperation = operation =>
         {
             if (operation == nameof(FakeTerminal.ReadKey) && terminal.KeysRead.Count == 3)
@@ -1426,8 +1548,9 @@ public class SkillPickerTests
         Assert.Contains("page 5 of 5", terminal.Frames[4]);
         Assert.Contains(focused, terminal.Frames[4]);
         Assert.DoesNotContain("Package.24", terminal.Frames[4]);
-        Assert.Equal(color ? uninstall ? TerminalStyle.Remove : TerminalStyle.Install : TerminalStyle.Default,
+        Assert.Equal(color ? TerminalStyle.Focus : TerminalStyle.Default,
             SkillSpan(terminal, 4, 24).Style);
+        Assert.Equal(color ? TerminalStyle.Selected : TerminalStyle.Default, CheckboxSpan(terminal, 4, 24, "X").Style);
         Assert.Equal(terminal.Frames[4], terminal.Frames[5]);
         Assert.Equal(terminal.Frames[4], terminal.Frames[6]);
         Assert.Empty(terminal.FrameWrites[5]);
@@ -1469,7 +1592,7 @@ public class SkillPickerTests
             {
                 Assert.Contains("desc-01-60", terminal.Screen);
                 Assert.DoesNotContain("<Ctrl+Up>", terminal.Screen);
-                Assert.Contains("> [x] skill-01 - desc-01-1", terminal.Screen);
+                Assert.Contains("> [X] skill-01 - desc-01-1", terminal.Screen);
             }
         };
 
@@ -1529,8 +1652,9 @@ public class SkillPickerTests
         }
 
         Assert.Equal(1, terminal.ViewportClears);
-        Assert.Contains("(Press <space> to select, <enter> to accept)", terminal.Screen);
-        Assert.All(terminal.Screen.Split(Environment.NewLine), line => Assert.True(TerminalText.Width(line) < 46));
+        Assert.Contains("(Press <space> to select, <enter> to accept)", terminal.LastPickerScreen);
+        Assert.All(terminal.LastPickerScreen.Split(Environment.NewLine), line => Assert.True(TerminalText.Width(line) < 46));
+        Assert.Empty(terminal.Screen);
         Assert.InRange(terminal.FinalCursorTop, 0, 17);
         Assert.True(terminal.IsCursorVisible);
         Assert.False(terminal.IsControlCTakenAsInput);
@@ -1560,7 +1684,7 @@ public class SkillPickerTests
         Assert.Contains(" - desc-01-1", terminal.Frames[9]);
         Assert.DoesNotContain("desc-01-60", terminal.Frames[9]);
         Assert.Contains("<Ctrl+Up>/<Ctrl+Down>", terminal.Frames[9]);
-        Assert.All(terminal.Frames.Skip(1), frame => Assert.Contains("> [x] skill-01", frame));
+        Assert.All(terminal.Frames.Skip(1), frame => Assert.Contains("> [X] skill-01", frame));
         AssertWithinWindow(terminal);
     }
 
@@ -1612,42 +1736,47 @@ public class SkillPickerTests
         var chosen = new SkillPicker(terminal).Choose(items, Title);
 
         Assert.Equal("skill-01", Assert.Single(chosen!));
-        Assert.Contains("[x] skill-01", terminal.Frames[^1]);
+        Assert.Contains("[X] skill-01", terminal.Frames[^1]);
         Assert.Contains("(Press <space> to select, <enter> to accept)", terminal.Frames[^1]);
         AssertWithinWindow(terminal);
     }
 
     [Fact]
-    public void Reserving_a_frame_near_the_bottom_scrolls_before_rendering_not_during_it()
+    public void A_picker_started_near_the_bottom_does_not_scroll_the_shell_buffer()
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
         terminal.SetCursorPosition(0, 16);
         terminal.Write("previous prompt");
+        var before = terminal.Screen;
 
         new SkillPicker(terminal).Choose(Items(3), Title);
 
         var lines = terminal.Frames[0].Split(Environment.NewLine);
-        Assert.Equal(Title, lines[6].TrimEnd());
-        Assert.Contains("> [ ] skill-01", lines[8]);
+        Assert.Equal(Title, lines[0].TrimEnd());
+        Assert.Contains("> [ ] skill-01", lines[2]);
         Assert.DoesNotContain("previous prompt", terminal.Frames[0]);
-        Assert.Equal(17, terminal.CursorTopAwaitingKey);
+        Assert.Equal(11, terminal.CursorTopAwaitingKey);
+        Assert.Equal(before, terminal.Screen);
+        Assert.Equal(16, terminal.FinalCursorTop);
         AssertWithinWindow(terminal);
     }
 
     [Fact]
-    public void A_small_frame_keeps_preceding_output_when_no_scrolling_is_needed()
+    public void A_small_frame_is_separate_from_preceding_output_and_restores_it()
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
         terminal.Write("earlier output");
         terminal.SetCursorPosition(0, 3);
+        var before = terminal.Screen;
 
         new SkillPicker(terminal).Choose(Items(3), Title);
 
         var lines = terminal.Frames[0].Split(Environment.NewLine);
-        Assert.Equal("earlier output", lines[0]);
-        Assert.Equal(Title, lines[3].TrimEnd());
-        Assert.Equal(14, terminal.CursorTopAwaitingKey);
-        Assert.Equal(15, terminal.FinalCursorTop);
+        Assert.Equal(Title, lines[0].TrimEnd());
+        Assert.DoesNotContain("earlier output", terminal.Frames[0]);
+        Assert.Equal(11, terminal.CursorTopAwaitingKey);
+        Assert.Equal(before, terminal.Screen);
+        Assert.Equal(3, terminal.FinalCursorTop);
         AssertWithinWindow(terminal);
     }
 
@@ -1667,7 +1796,7 @@ public class SkillPickerTests
 
         new SkillPicker(terminal).Choose(Items(3), Title);
 
-        Assert.Contains(TerminalStyle.Install, terminal.StyleEvents);
+        Assert.Contains(TerminalStyle.Selected, terminal.StyleEvents);
         Assert.Equal(original, terminal.CaptureState());
     }
 
@@ -1681,12 +1810,13 @@ public class SkillPickerTests
         var chosen = new SkillPicker(terminal).Choose(Items(3), Title);
 
         Assert.Null(chosen);
-        Assert.Contains(TerminalStyle.Install, terminal.StyleEvents);
+        Assert.Contains(TerminalStyle.Selected, terminal.StyleEvents);
         Assert.Equal(original, terminal.CaptureState());
     }
 
     [Theory]
     [InlineData("UseUtf8Output")]
+    [InlineData("EnterInteractiveScreen")]
     [InlineData("CursorVisible")]
     [InlineData("TreatControlCAsInput")]
     [InlineData("SetStyle")]
@@ -1718,6 +1848,8 @@ public class SkillPickerTests
         Assert.Equal($"failure in {operation}", error.Message);
         Assert.True(failed);
         Assert.Equal(original, terminal.CaptureState());
+        Assert.False(terminal.IsInteractiveScreen);
+        Assert.Equal(terminal.ScreenEntries, terminal.ScreenExits);
     }
 
     [Fact]
@@ -1734,13 +1866,14 @@ public class SkillPickerTests
 
         Assert.Throws<IOException>(() => new SkillPicker(terminal).Choose(Items(3), Title));
 
-        Assert.Contains(TerminalStyle.Install, terminal.StyleEvents);
+        Assert.Contains(TerminalStyle.Selected, terminal.StyleEvents);
         Assert.Equal(TerminalStyle.Default, terminal.CurrentStyle);
         Assert.Equal(ConsoleColor.Gray, terminal.Foreground);
         Assert.Equal(ConsoleColor.Black, terminal.Background);
         Assert.True(terminal.IsCursorVisible);
         Assert.False(terminal.IsControlCTakenAsInput);
-        Assert.Equal(12, terminal.FinalCursorTop);
+        Assert.Equal(12, terminal.LastPickerCursorTop);
+        Assert.Equal(0, terminal.FinalCursorTop);
     }
 
     [Fact]
@@ -1752,7 +1885,7 @@ public class SkillPickerTests
         var original = terminal.CaptureState();
         terminal.BeforeOperation = operation =>
         {
-            if (operation == nameof(FakeTerminal.Write) && terminal.CurrentStyle == TerminalStyle.Install)
+            if (operation == nameof(FakeTerminal.Write) && terminal.CurrentStyle == TerminalStyle.Selected)
             {
                 throw new IOException("colored write failed");
             }
@@ -1761,10 +1894,12 @@ public class SkillPickerTests
         var error = Assert.Throws<IOException>(() => new SkillPicker(terminal).Choose(Items(3), Title));
 
         Assert.Equal("colored write failed", error.Message);
-        Assert.Contains(TerminalStyle.Install, terminal.StyleEvents);
+        Assert.Contains(TerminalStyle.Selected, terminal.StyleEvents);
         Assert.Equal(original, terminal.CaptureState());
-        Assert.Equal(12, terminal.FinalCursorTop);
-        Assert.Contains("Green: install", terminal.Screen);
+        Assert.Equal(12, terminal.LastPickerCursorTop);
+        Assert.Equal(0, terminal.FinalCursorTop);
+        Assert.Contains("Blue X: selected", terminal.LastPickerScreen);
+        Assert.Empty(terminal.Screen);
     }
 
     [Theory]
@@ -1837,7 +1972,7 @@ public class SkillPickerTests
         Assert.Equal(Encoding.UTF8.GetBytes(ExpectedSpan), description.Bytes);
         Assert.Equal(Encoding.UTF8.CodePage, description.OutputCodePage);
         Assert.DoesNotContain((byte)0x1b, description.Bytes);
-        Assert.Equal(TerminalStyle.Default, description.Style);
+        Assert.Equal(color ? TerminalStyle.Focus : TerminalStyle.Default, description.Style);
         Assert.Contains("測試", terminal.Frames[0]);
         Assert.Contains("🧪", terminal.Frames[0]);
         Assert.Contains("Cafe\u0301", terminal.Frames[0]);
@@ -1878,6 +2013,8 @@ public class SkillPickerTests
         Assert.Same(Encoding.Latin1, empty.OutputEncoding);
         Assert.Empty(redirected.Writes);
         Assert.Empty(empty.Writes);
+        Assert.Equal(0, redirected.ScreenEntries);
+        Assert.Equal(0, empty.ScreenEntries);
     }
 
     [Fact]
@@ -1896,9 +2033,11 @@ public class SkillPickerTests
         Assert.Equal(["猫", "ab", "👩🏽‍💻"], chosen!);
         var descriptions = terminal.FrameWrites[0].Where(write => write.Text.StartsWith(" - ", StringComparison.Ordinal)).ToArray();
         Assert.Equal([8, 8, 8], descriptions.Select(write => write.Left));
-        Assert.All(descriptions, write => Assert.Equal(TerminalStyle.Default, write.Style));
-        Assert.Contains("> [x] 猫 - First.", terminal.Frames[1]);
-        Assert.Contains("[x] 👩🏽‍💻 - Third.", terminal.Frames[1]);
+        Assert.Equal(
+            [TerminalStyle.Focus, TerminalStyle.Default, TerminalStyle.Default],
+            descriptions.Select(write => write.Style));
+        Assert.Contains("> [X] 猫 - First.", terminal.Frames[1]);
+        Assert.Contains("[X] 👩🏽‍💻 - Third.", terminal.Frames[1]);
         AssertWithinWindow(terminal);
     }
 

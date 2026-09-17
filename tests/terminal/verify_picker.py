@@ -39,6 +39,40 @@ CTRL_UP, CTRL_DOWN, CTRL_C = "\x1b[1;5A", "\x1b[1;5B", "\x03"
 ASPIRE_HINT = "(Press <space> to select, <enter> to accept)"
 
 
+class ReflowEmulator:
+    def __init__(self, rows, columns):
+        self.process = subprocess.Popen(
+            ["node", str(Path(__file__).with_name("emulator.cjs"))],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8",
+        )
+        try:
+            self.state = self.send("open", rows=rows, columns=columns)
+        except Exception:
+            self.close()
+            raise
+
+    def send(self, action, **parameters):
+        self.process.stdin.write(json.dumps({"action": action, **parameters}) + "\n")
+        self.process.stdin.flush()
+        line = self.process.stdout.readline()
+        if not line:
+            raise AssertionError("Terminal emulator failed: " + self.process.stderr.read())
+        self.state = json.loads(line)
+        return self.state
+
+    def close(self):
+        self.process.stdin.close()
+        try:
+            self.process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=5)
+        finally:
+            self.process.stdout.close()
+            self.process.stderr.close()
+
+
 class Terminal:
     def __init__(self, command, directory, environment, log, rows=24, columns=100):
         self.process = PtyProcess.spawn(
@@ -53,6 +87,7 @@ class Terminal:
         self.frames = []
         self.ended = False
         self.closing = threading.Event()
+        self.emulator = None
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
 
@@ -85,6 +120,8 @@ class Terminal:
         else:
             self.raw.append(data)
             self.stream.feed(data)
+            if self.emulator is not None:
+                self.emulator.send("write", data=data)
         return True
 
     @property
@@ -121,7 +158,7 @@ class Terminal:
 
     def ready(self):
         self.wait_for(
-            lambda: ASPIRE_HINT in self.compact and re.search(r"\[[ x]\]", self.text),
+            lambda: ASPIRE_HINT in self.compact and re.search(r"\[[ X]\]", self.text),
             "initial picker",
         )
         return self
@@ -143,6 +180,8 @@ class Terminal:
         raise AssertionError(f"{text!r} is not visible.\n{self.text}")
 
     def resize(self, rows, columns):
+        if self.emulator is not None:
+            self.emulator.send("resize", rows=rows, columns=columns)
         self.screen.resize(lines=rows, columns=columns)
         self.process.setwinsize(rows, columns)
 
@@ -163,6 +202,10 @@ class Terminal:
         self.log.parent.mkdir(parents=True, exist_ok=True)
         self.log.with_suffix(".ansi.txt").write_text("".join(self.raw), encoding="utf-8")
         self.log.with_suffix(".screen.txt").write_text("\n\n".join(self.frames), encoding="utf-8")
+        if self.emulator is not None:
+            self.log.with_suffix(".buffers.json").write_text(
+                json.dumps(self.emulator.state, indent=2), encoding="utf-8")
+            self.emulator.close()
 
 
 def snapshot(directory):
@@ -407,7 +450,7 @@ class PickerRegression(unittest.TestCase):
         self.assertIn("25 of 25 selected", terminal.compact)
         self.assertIn("0 to remove", terminal.compact)
         terminal.press(END, lambda: "beta-10" in terminal.focused, "retained stale skill")
-        self.assertIn("[x]", terminal.focused)
+        self.assertIn("[X]", terminal.focused)
         self.assertIn("Installed copy; kept unless you uncheck it.", terminal.compact)
         self.assertEqual(0, terminal.finish())
         self.assertEqual(before, snapshot(self.destination))
@@ -550,6 +593,29 @@ class PickerRegression(unittest.TestCase):
                     self.assertIn("Could not read the install manifest", result.stderr)
                     self.assertEqual(before, snapshot(self.destination))
             self.cli("list", "--json")
+
+    def test_unsafe_manifest_names_fail_before_prompting_or_writing(self):
+        self.prepare_project()
+        self.cli("install")
+        original = self.manifest.read_text(encoding="utf-8")
+        for unsafe_name in ("...", ".. ", "team-owned.", "team-owned "):
+            damaged = json.loads(original)
+            damaged["installed"].append(
+                {"package": "Unsafe.Owner", "version": "1.0.0", "skills": [unsafe_name]})
+            self.manifest.write_text(json.dumps(damaged), encoding="utf-8")
+            before = snapshot(self.destination)
+            for verb in ("install", "uninstall"):
+                for flags in ([], ["--json"], ["--dry-run"], ["--dry-run", "--json"],
+                              ["-i"], ["-i", "--dry-run"]):
+                    with self.subTest(unsafe_name=unsafe_name, verb=verb, flags=flags):
+                        result = self.cli(verb, *flags, expected=1)
+                        self.assertEqual("", result.stdout)
+                        self.assertIn("not a safe skill folder name", result.stderr)
+                        self.assertIn("No skills were changed", result.stderr)
+                        self.assertIn("preserved", result.stderr)
+                        self.assertEqual(before, snapshot(self.destination))
+            self.cli("list", "--json")
+            self.assertEqual(before, snapshot(self.destination))
 
     def test_current_owner_refresh_is_not_blocked_by_an_earlier_named_collision(self):
         self.add_shared_skills()
@@ -734,14 +800,37 @@ class PickerRegression(unittest.TestCase):
         self.assertIsNotNone(pages, terminal.text)
         self.assertGreaterEqual(int(pages[1]), 3)
         self.assertEqual({"brightblue"}, set(terminal.colors(">")))
-        terminal.press(SPACE, lambda: "[x]" in terminal.focused, "pending install")
-        self.assertEqual({"brightgreen"}, set(terminal.colors("alpha-01")))
+        terminal.press(SPACE, lambda: "[X]" in terminal.focused, "pending install")
+        self.assertEqual({"brightblue"}, set(terminal.colors("alpha-01")))
+        self.assertEqual({"brightblue"}, set(terminal.colors("[X]")))
         self.assertEqual({"brightblue"}, set(terminal.colors(">")))
-        self.assertNotIn("brightgreen", terminal.colors("ALPHA-FIRST"))
+        self.assertEqual({"brightblue"}, set(terminal.colors("ALPHA-FIRST")))
+        terminal.press(DOWN, lambda: "alpha-02" in terminal.focused, "move focus off the checked skill")
+        self.assertNotIn("brightblue", terminal.colors("alpha-01"))
+        self.assertEqual("brightblue", terminal.colors("[X]")[1])
+        self.assertNotIn("brightblue", terminal.colors("ALPHA-FIRST"))
+        terminal.press(UP, lambda: "alpha-01" in terminal.focused, "return to checked skill")
         terminal.press(SPACE, lambda: "[ ]" in terminal.focused, "undo install")
         self.assertNotIn("brightgreen", terminal.colors("alpha-01"))
         self.assertEqual(0, terminal.finish(ESC))
         self.assertFalse(self.manifest.exists())
+
+    def test_focus_colors_all_wrapped_lines_and_checked_mark_stays_blue_off_focus(self):
+        terminal = self.terminal().ready()
+        terminal.press(DOWN, lambda: "alpha-02" in terminal.focused, "focus multiline skill")
+        first = next(i for i, line in enumerate(terminal.screen.display) if "alpha-02 - " in line)
+        self.assertTrue(terminal.screen.display[first + 1].strip())
+        for row in (first, first + 1):
+            self.assertEqual(
+                {"brightblue"},
+                {cell.fg for cell in terminal.screen.buffer[row].values() if cell.data.strip()},
+            )
+        terminal.press(SPACE, lambda: "[X]" in terminal.focused, "check multiline skill")
+        terminal.press(DOWN, lambda: "alpha-03" in terminal.focused, "move off multiline skill")
+        self.assertNotIn("brightblue", terminal.colors("alpha-02"))
+        self.assertNotIn("brightblue", terminal.colors("Guidance for alpha-02"))
+        self.assertEqual("brightblue", terminal.colors("[X]")[1])
+        self.assertEqual(0, terminal.finish(ESC))
 
     def test_each_name_is_followed_directly_by_the_description_without_package_metadata(self):
         self.cache = self.root / "compact cache"
@@ -772,7 +861,7 @@ class PickerRegression(unittest.TestCase):
         terminal = self.terminal().ready()
         terminal.press("a", lambda: "25 of 25" in terminal.compact, "select all pages")
         terminal.press(END, lambda: "beta-10" in terminal.focused, "last skill")
-        self.assertIn("[x]", terminal.focused)
+        self.assertIn("[X]", terminal.focused)
         terminal.press("c", lambda: "0 of 25" in terminal.compact, "clear all pages")
         terminal.press(HOME, lambda: "alpha-01" in terminal.focused, "first skill")
         self.assertIn("[ ]", terminal.focused)
@@ -803,15 +892,18 @@ class PickerRegression(unittest.TestCase):
         self.assertEqual({"alpha-01", "alpha-02"}, self.installed())
         self.assertTrue((self.destination / "team-owned" / "SKILL.md").exists())
 
-    def test_reopening_preselects_installed_items_and_shows_removal_in_red(self):
+    def test_reopening_preselects_installed_items_and_marks_removal_with_red_brackets(self):
         self.cli("install", packages=["Demo.Alpha@1.0.0"])
         before = snapshot(self.destination)
         terminal = self.terminal().ready()
-        self.assertIn("[x]", terminal.focused)
+        self.assertIn("[X]", terminal.focused)
         self.assertNotIn("brightgreen", terminal.colors("alpha-01"))
         terminal.press(SPACE, lambda: "[ ]" in terminal.focused, "pending removal")
-        self.assertEqual({"brightred"}, set(terminal.colors("alpha-01")))
-        terminal.press(SPACE, lambda: "[x]" in terminal.focused, "keep installed")
+        brackets = terminal.colors("[ ]")
+        self.assertEqual("brightred", brackets[0])
+        self.assertEqual("brightred", brackets[2])
+        self.assertEqual({"brightblue"}, set(terminal.colors("alpha-01")))
+        terminal.press(SPACE, lambda: "[X]" in terminal.focused, "keep installed")
         self.assertNotIn("brightred", terminal.colors("alpha-01"))
         self.assertEqual(0, terminal.finish())
         self.assertEqual(before, snapshot(self.destination))
@@ -833,8 +925,13 @@ class PickerRegression(unittest.TestCase):
         self.assertNotIn("team-owned", terminal.text)
         self.assertNotIn("alpha-", terminal.text)
         self.assertIn("0 of 10", terminal.compact)
-        terminal.press(SPACE, lambda: "[x]" in terminal.focused, "select removal")
-        self.assertEqual({"brightred"}, set(terminal.colors("beta-01")))
+        terminal.press(SPACE, lambda: "[X]" in terminal.focused, "select removal")
+        self.assertEqual(["brightred", "brightblue", "brightred"], terminal.colors("[X]"))
+        self.assertEqual({"brightblue"}, set(terminal.colors("beta-01")))
+        terminal.press(DOWN, lambda: "beta-02" in terminal.focused, "leave the removal checked")
+        self.assertNotIn("brightred", terminal.colors("beta-01"))
+        self.assertNotIn("brightblue", terminal.colors("beta-01"))
+        self.assertEqual(["brightred", "brightblue", "brightred"], terminal.colors("[X]"))
         self.assertEqual(0, terminal.finish())
         self.assertEqual({f"beta-{number:02}" for number in range(2, 11)}, self.installed())
 
@@ -909,7 +1006,7 @@ class PickerRegression(unittest.TestCase):
         self.assert_frame(terminal)
         terminal.press(HOME, lambda: "alpha-01" in terminal.focused, "wide resized frame")
         self.assert_frame(terminal)
-        self.assertIn("[x]", terminal.focused)
+        self.assertIn("[X]", terminal.focused)
         self.assertEqual(0, terminal.finish())
         self.assertEqual({"alpha-01"}, self.installed())
 
@@ -944,15 +1041,63 @@ class PickerRegression(unittest.TestCase):
                 self.assertEqual(0, terminal.finish(ESC))
                 self.assertEqual(before, snapshot(self.destination))
 
+    def test_resize_reflow_does_not_leave_duplicate_picker_frames_in_normal_scrollback(self):
+        before = snapshot(self.destination)
+        terminal = self.terminal(rows=70, columns=210, powershell=True)
+        terminal.emulator = ReflowEmulator(70, 210)
+        terminal.ready()
+        terminal.press(SPACE, lambda: "1 of 25" in terminal.compact, "selected before host reflow")
+        terminal.resize(24, 80)
+        terminal.wait_for(
+            lambda: ASPIRE_HINT in terminal.compact and "1 of 25" in terminal.compact
+            and terminal.page_count > 1,
+            "host-reflowed narrow picker",
+        )
+
+        state = terminal.emulator.state
+        self.assertNotIn("Which skills should be installed?", state["normal"])
+        self.assertTrue(state["alternate"])
+        self.assertEqual(1, state["active"].count("Which skills should be installed?"))
+        terminal.resize(50, 160)
+        terminal.wait_for(lambda: ASPIRE_HINT in terminal.compact and "[X]" in terminal.focused, "grown picker")
+        self.assertNotIn("Which skills should be installed?", terminal.emulator.state["normal"])
+        self.assertEqual(0, terminal.finish(ESC))
+        state = terminal.emulator.state
+        self.assertFalse(state["alternate"])
+        self.assertNotIn("Which skills should be installed?", state["normal"])
+        self.assertIn("earlier console output", state["normal"])
+        self.assertIn("Cancelled.", state["normal"])
+        self.assertEqual(before, snapshot(self.destination))
+
+    def test_interactive_screen_restores_shell_output_on_accept_cancel_and_interrupt(self):
+        for verb in ("install", "uninstall"):
+            if verb == "uninstall":
+                self.cli("install")
+            for key in (ENTER, ESC, CTRL_C):
+                with self.subTest(verb=verb, key=repr(key)):
+                    before = snapshot(self.destination)
+                    terminal = self.terminal(verb, "--dry-run", rows=32, columns=100, powershell=True)
+                    terminal.emulator = ReflowEmulator(32, 100)
+                    terminal.ready()
+                    self.assertTrue(terminal.emulator.state["alternate"])
+                    terminal.press("a")
+                    self.assertEqual(0, terminal.finish(key))
+                    state = terminal.emulator.state
+                    self.assertFalse(state["alternate"])
+                    self.assertIn("earlier console output", state["normal"])
+                    self.assertNotIn("Which skills should", state["normal"])
+                    self.assertIn("Cancelled." if key != ENTER else "Would", state["normal"])
+                    self.assertEqual(before, snapshot(self.destination))
+
     def test_no_color_mode_exposes_action_markers_without_color(self):
         terminal = self.terminal(no_color=True).ready()
-        terminal.press(SPACE, lambda: "[x]" in terminal.focused, "no-color installation")
+        terminal.press(SPACE, lambda: "[X]" in terminal.focused, "no-color installation")
         self.assertIn("+", terminal.focused)
         self.assertNotIn("brightgreen", terminal.colors("alpha-01"))
         self.assertNotIn("brightblue", terminal.colors(">"))
         self.assertEqual(0, terminal.finish())
         terminal = self.terminal("uninstall", no_color=True).ready()
-        terminal.press(SPACE, lambda: "[x]" in terminal.focused, "no-color removal")
+        terminal.press(SPACE, lambda: "[X]" in terminal.focused, "no-color removal")
         self.assertIn("-", terminal.focused.split("alpha-01")[0])
         self.assertEqual(0, terminal.finish())
         self.assertEqual(set(), self.installed())

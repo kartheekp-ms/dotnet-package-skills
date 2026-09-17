@@ -267,8 +267,7 @@ internal sealed class PickerLayout
             : "(Press <Esc>/<q>/<Ctrl+C> to cancel)";
         yield return (supportsColor, mode) switch
         {
-            (true, PickerMode.Install) => "Green: install   Red: remove",
-            (true, PickerMode.Uninstall) => "Red: remove",
+            (true, _) => "Blue X: selected   Red brackets: remove",
             (false, PickerMode.Install) => "+ install   - remove",
             _ => "- remove",
         };

@@ -91,7 +91,7 @@ pick among the skills it ships — which is what you want when one package bundl
 ```
 Which skills should be installed? (MyApp.slnx)  page 1 of 3
 
-> [x] mockly-setup - Configure mocks and test
+> [X] mockly-setup - Configure mocks and test
       doubles for unit tests.
   [ ] mockly-usage - Common Mockly usage patterns.
 
@@ -102,9 +102,9 @@ Which skills should be installed? (MyApp.slnx)  page 1 of 3
 Each description follows the authored skill name immediately after ` - `, without a padded
 column or a package/version suffix. Package prefixes in authored names are kept, and continuation
 lines flow beneath the skill text, using the available width rather than leaving a name-sized gap.
-The highlighted `>` is blue; skill names and checkboxes
-are green for a pending installation, red for a pending removal, and their normal color when nothing changes. Descriptions
-stay neutral so they are easy to read. The summary counts pending actions; there is no separate
+The focused skill's text, including wrapped description lines, is blue. Checked items have a blue
+`X`; other skill names and descriptions use their normal color. Only the square brackets turn red
+when that row is marked for removal, including on the focused row. The summary counts pending actions; there is no separate
 status column. With `NO_COLOR` set, or on a terminal without color support, compact `+` and `-`
 markers indicate installation and removal instead.
 
@@ -131,6 +131,9 @@ page in place while preserving the highlighted skill and checked items, even dur
 Old picker frames are not pushed into scrollback. When scrolling an oversized description, the
 skill row stays visible while its continuation lines scroll. Short lists and partial final pages
 do not leave a screenful of blank rows, and a single page has no page counter.
+The live picker uses a temporary terminal screen so host-driven reflow cannot leave duplicate
+copies in normal scrollback. Accepting, cancelling, or a handled failure restores the previous
+shell screen; the final report is written there, not alongside an old checklist.
 
 Descriptions come from the top-level YAML `description` in each package's `SKILL.md`. Missing
 descriptions say `No description provided.`; unreadable or malformed metadata shows an explicit
@@ -161,7 +164,7 @@ dotnet package-skills uninstall --interactive
 ```
 Which skills should be uninstalled?
 
-> [x] mockly-setup - Configure mocks and test
+> [X] mockly-setup - Configure mocks and test
       doubles for unit tests.
   [ ] mockly-usage - Common Mockly usage patterns.
 
@@ -408,6 +411,10 @@ anything and preserve the file for repair. Resolve any merge conflict or restore
 control before retrying. If it cannot be recovered, move the whole destination folder aside before
 installing again; the tool will not guess which existing folders it owns.
 Missing ownership data and duplicate skill claims are also treated as damaged manifests.
+Skill names must identify a single folder directly inside the destination. Names ending in a dot
+or space, including `...`, are rejected because Windows can resolve them to another folder or the
+destination itself. A manifest containing such a name blocks install and uninstall, including
+interactive and dry-run modes, before any skill files or manifest bytes are changed.
 Concurrent tool operations on the same destination are serialized, and an interactive choice
 is rejected if ownership changed before it could be applied.
 

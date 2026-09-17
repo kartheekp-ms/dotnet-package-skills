@@ -200,7 +200,7 @@ public class InteractiveSkillsTests
         Assert.True(item.Installed);
         Assert.True(item.Retained);
         Assert.Equal("The installed description.", item.Description);
-        Assert.Contains("[x] stale", terminal.Frames[0]);
+        Assert.Contains("[X] stale", terminal.Frames[0]);
         Assert.Contains("Installed copy; kept unless you uncheck it.", terminal.Frames[0]);
         Assert.Contains("0 to remove", terminal.Frames[0]);
         Assert.Empty(choice.Selected);

@@ -58,10 +58,12 @@ internal sealed class SkillPicker(ITerminal terminal)
         var frameStarted = false;
         var resetViewport = false;
         var original = terminal.CaptureState();
+        IDisposable? screen = null;
 
         try
         {
             terminal.UseUtf8Output();
+            screen = terminal.EnterInteractiveScreen();
             terminal.CursorVisible = false;
             terminal.TreatControlCAsInput = true;
             terminal.ResetStyle();
@@ -173,7 +175,14 @@ internal sealed class SkillPicker(ITerminal terminal)
             }
             finally
             {
-                terminal.RestoreState(original);
+                try
+                {
+                    screen?.Dispose();
+                }
+                finally
+                {
+                    terminal.RestoreState(original);
+                }
             }
         }
 
@@ -285,27 +294,29 @@ internal sealed class SkillPicker(ITerminal terminal)
         for (var index = page.First; index < page.First + page.Count; index++)
         {
             var entry = layout.Entries[index];
-            var action = ActionStyle(items[index], selected.Contains(index), mode);
+            var isSelected = selected.Contains(index);
+            var pendingRemoval = mode == PickerMode.Uninstall ? isSelected : items[index].Installed && !isSelected;
+            var pendingInstall = mode == PickerMode.Install && !items[index].Installed && isSelected;
+            var rowStyle = index == cursor ? TerminalStyle.Focus : TerminalStyle.Default;
+            var bracketStyle = pendingRemoval ? TerminalStyle.Remove : rowStyle;
             var offset = page.Scrollable ? scroll[index] : 0;
             var rows = page.Scrollable ? page.VisibleRows : entry.Height;
-            var marker = action switch
-            {
-                TerminalStyle.Install => '+',
-                TerminalStyle.Remove => '-',
-                _ => ' ',
-            };
+            var marker = pendingRemoval ? '-' : pendingInstall ? '+' : ' ';
             // Continuations are wider than the space after the name, so scroll them below
             // the fixed skill row rather than placing one into its narrower first-line slot.
             WriteRow(
                 layout, frameTop, ref height,
-                new Span(index == cursor ? ">" : " ", index == cursor ? TerminalStyle.Focus : TerminalStyle.Default),
-                new Span(layout.SupportsColor ? " " : $" {marker} "),
-                new Span($"[{(selected.Contains(index) ? 'x' : ' ')}] {entry.Label}", action),
-                new Span($" - {entry.Description[0]}"));
+                new Span(index == cursor ? ">" : " ", rowStyle),
+                new Span(layout.SupportsColor ? " " : $" {marker} ", rowStyle),
+                new Span("[", bracketStyle),
+                new Span(isSelected ? "X" : " ", isSelected ? TerminalStyle.Selected : rowStyle),
+                new Span("]", bracketStyle),
+                new Span($" {entry.Label}", rowStyle),
+                new Span($" - {entry.Description[0]}", rowStyle));
             for (var line = 1; line < rows; line++)
             {
                 WriteRow(layout, frameTop, ref height,
-                    new Span(new string(' ', layout.ContinuationColumn) + entry.Description[offset + line]));
+                    new Span(new string(' ', layout.ContinuationColumn) + entry.Description[offset + line], rowStyle));
             }
         }
 
@@ -382,16 +393,6 @@ internal sealed class SkillPicker(ITerminal terminal)
             throw new ViewportChangedException();
         }
     }
-
-    private static TerminalStyle ActionStyle(SkillPickerItem item, bool selected, PickerMode mode) =>
-        mode == PickerMode.Uninstall
-            ? selected ? TerminalStyle.Remove : TerminalStyle.Default
-            : (item.Installed, selected) switch
-            {
-                (false, true) => TerminalStyle.Install,
-                (true, false) => TerminalStyle.Remove,
-                _ => TerminalStyle.Default,
-            };
 
     private readonly record struct Span(string Text, TerminalStyle Style = TerminalStyle.Default);
 

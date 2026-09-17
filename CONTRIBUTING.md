@@ -84,7 +84,10 @@ warning without hiding the skill. This intentionally replaces the former no-fron
 rule so users can make an informed selection. Regular reports, JSON, and manifests are unchanged.
 
 **Skill names from packages are untrusted input.** They become path segments in the user's repo.
-`SkillDiscovery.IsSafeSkillName` is the gate; keep it strict.
+`SkillDiscovery.IsSafeSkillName` is the shared discovery/manifest gate; keep it strict. Reject names
+ending in dots or spaces on every platform, since Windows can normalize them to another folder or
+the destination itself. Before mutation, resolve all affected skill paths as direct children of the
+destination; removing a skill must not walk up and delete its parents.
 
 **Only complete, noninteractive target discovery licenses automatic pruning.** `--package` says
 nothing about unrelated installed skills, and an interactive picker may remove only explicitly
@@ -126,10 +129,10 @@ notation for paging, select-all, clear-all, cancel, and description scrolling, b
 keyboard-help line with `Press`. Wrap help rather than clipping away the keys. Only advertise
 paging and scrolling when they are useful.
 
-**Focus and pending actions are separate cues.** Blue identifies the focus marker, green marks a
-pending installation, and red marks a pending removal. An installed skill being kept is neutral.
-Do not paint a whole focused row blue and obscure its action color. Descriptions stay neutral,
-and a summary counts pending actions. No-color terminals use compact `+`/`-` action markers
+**Focus, checked state, and removal are separate cues.** The focused skill's text and all wrapped
+description lines are blue. A checked item has a blue uppercase `X`; names do not become green or
+red because of selection. Pending removal colors only the `[` and `]` red, even when the rest of
+the row is focused blue. A summary counts pending actions. No-color terminals use compact `+`/`-` action markers
 instead; respect `NO_COLOR`. A dedicated status column would take space away from descriptions.
 
 **A tick means the opposite thing in each picker, and that is deliberate.** Installing, it keeps
@@ -158,6 +161,9 @@ between the check and mutation. Canonicalize destination aliases before choosing
 if its viewport changes, and clear cells in place rather than scrolling blank lines. Otherwise
 old picker copies accumulate in terminal history and can wrap incorrectly when the host resizes.
 Preserve prior scrollback, focus, and selections; never swallow unrelated rendering failures.
+The picker owns an alternate screen for its entire lifetime. Clearing just the current viewport
+cannot erase old rows that the host has already reflowed into normal history. Restore the original
+screen and output mode on every managed exit, then write the final report on the normal screen.
 
 Every render also parks the cursor directly below the last line it drew, rather than at the bottom
 of the rows the frame reserved. That is what the shell prompt lands on if the process dies without
@@ -230,6 +236,7 @@ dependencies of the .NET tool.
 dotnet build -c Release
 python -m venv artifacts\terminal-venv
 artifacts\terminal-venv\Scripts\python.exe -m pip install -r tests\terminal\requirements.txt
+npm ci --prefix tests\terminal --ignore-scripts --no-audit --no-fund
 artifacts\terminal-venv\Scripts\python.exe tests\terminal\verify_picker.py `
   --tool src\DotnetPackageSkills\bin\Release\net10.0\dotnet-package-skills.exe `
   --artifacts artifacts\terminal-results
@@ -238,6 +245,9 @@ artifacts\terminal-venv\Scripts\python.exe tests\terminal\verify_picker.py `
 Rendered frames and raw terminal output are saved under the supplied artifacts directory.
 The suite checks descriptions, action/focus colors, no-color markers, variable-height pagination,
 scrolling, resize, confirm/cancel, dry runs, ownership preservation, and the unchanged JSON contract.
+The duplicate-frame regressions also feed the real terminal output through an xterm emulator
+that models normal-buffer text reflow and alternate screens; a clipped-cell mock alone misses
+the host behavior that originally left stale headings in scrollback.
 Fixtures are removed after each case; logs remain available for diagnosing failures.
 
 ### Naming unit tests

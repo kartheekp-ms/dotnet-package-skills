@@ -94,6 +94,7 @@ public sealed class SkillInstaller
             .Where(entry => prune || removeAnyway.Contains(entry.Skill))
             .OrderBy(entry => entry.Skill, StringComparer.Ordinal)
             .ToList();
+        var stalePaths = stale.Select(entry => ToAbsolute(destinationRoot, entry.Skill)).ToList();
 
         foreach (var skill in accepted)
         {
@@ -111,10 +112,9 @@ public sealed class SkillInstaller
             return new InstallOutcome(accepted, stale, skipped);
         }
 
-        // Remove before copying so a stale ancestor can never delete a freshly copied skill.
-        foreach (var entry in stale)
+        foreach (var path in stalePaths)
         {
-            RemoveSkillDirectory(destinationRoot, entry.Skill);
+            RemoveSkillDirectory(path);
         }
 
         foreach (var skill in accepted)
@@ -183,15 +183,16 @@ public sealed class SkillInstaller
             .Where(entry => chosen is null || chosen.Contains(entry.Skill))
             .OrderBy(entry => entry.Skill, StringComparer.Ordinal)
             .ToList();
+        var targetedPaths = targeted.Select(entry => ToAbsolute(destinationRoot, entry.Skill)).ToList();
 
         if (targeted.Count == 0 || dryRun)
         {
             return targeted;
         }
 
-        foreach (var entry in targeted)
+        foreach (var path in targetedPaths)
         {
-            RemoveSkillDirectory(destinationRoot, entry.Skill);
+            RemoveSkillDirectory(path);
         }
 
         manifest.SetSkills(trackedSkills.Except(targeted));
@@ -236,34 +237,36 @@ public sealed class SkillInstaller
         }
     }
 
-    private static string ToAbsolute(string destinationRoot, string relativePath) =>
-        Path.Combine(destinationRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
-
-    /// <summary>
-    /// Deletes an installed skill folder, then any empty parent directories below the destination.
-    /// </summary>
-    private static bool RemoveSkillDirectory(string destinationRoot, string relativePath)
+    private static string ToAbsolute(string destinationRoot, string relativePath)
     {
-        var absolute = ToAbsolute(destinationRoot, relativePath);
-
-        if (!Directory.Exists(absolute))
+        if (!SkillDiscovery.IsSafeSkillName(relativePath))
         {
-            return false;
+            throw UnsafeSkillPath(destinationRoot, relativePath);
         }
 
-        Directory.Delete(absolute, recursive: true);
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destinationRoot));
+        var absolute = Path.GetFullPath(Path.Combine(root, relativePath));
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
-        var parent = Path.GetDirectoryName(absolute);
-        var root = Path.GetFullPath(destinationRoot);
-
-        while (!string.IsNullOrEmpty(parent) &&
-               !Path.GetFullPath(parent).Equals(root, StringComparison.Ordinal) &&
-               TryRemoveEmptyDirectory(parent))
+        if (!string.Equals(Path.GetDirectoryName(absolute), root, comparison))
         {
-            parent = Path.GetDirectoryName(parent);
+            throw UnsafeSkillPath(destinationRoot, relativePath);
         }
 
-        return true;
+        return absolute;
+    }
+
+    private static PackageSkillsException UnsafeSkillPath(string destinationRoot, string relativePath) =>
+        new(
+            $"The path '{relativePath}' is not a safe skill folder directly inside '{destinationRoot}'. " +
+            "Restore the package or repair the install manifest before retrying. No skills were changed.");
+
+    private static void RemoveSkillDirectory(string absolute)
+    {
+        if (Directory.Exists(absolute))
+        {
+            Directory.Delete(absolute, recursive: true);
+        }
     }
 
     private static bool TryRemoveEmptyDirectory(string directory)

@@ -62,11 +62,13 @@ public static class SkillDiscovery
     /// <summary>
     /// Rejects names that would write outside the destination or produce an unusable path. The
     /// name comes from a third-party package, so it is untrusted input even though the file
-    /// system has already resolved it to a real directory.
+    /// system has already resolved it to a real directory. Reject trailing dots and spaces on
+    /// every platform: Windows normalizes them, and an all-dot name can resolve to the parent.
     /// </summary>
     internal static bool IsSafeSkillName(string name) =>
         !string.IsNullOrWhiteSpace(name) &&
-        name is not ("." or "..") &&
+        !name.EndsWith('.') &&
+        !name.EndsWith(' ') &&
         name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 &&
         !name.Contains('/') &&
         !name.Contains('\\');

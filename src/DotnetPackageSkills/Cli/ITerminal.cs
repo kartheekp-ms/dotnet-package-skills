@@ -7,7 +7,7 @@ internal enum TerminalStyle
 {
     Default,
     Focus,
-    Install,
+    Selected,
     Remove,
     Muted,
 }
@@ -45,6 +45,8 @@ internal interface ITerminal
 
     /// <summary>Uses lossless Unicode output for this interaction; RestoreState restores the encoding.</summary>
     void UseUtf8Output();
+
+    IDisposable EnterInteractiveScreen();
 
     void SetStyle(TerminalStyle style);
 
@@ -116,6 +118,8 @@ internal sealed class SystemTerminal : ITerminal
 
     public void UseUtf8Output() => Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
+    public IDisposable EnterInteractiveScreen() => InteractiveScreen.Enter();
+
     public void RestoreState(TerminalState state)
     {
         try
@@ -170,7 +174,7 @@ internal sealed class SystemTerminal : ITerminal
         var color = style switch
         {
             TerminalStyle.Focus => ConsoleColor.Blue,
-            TerminalStyle.Install => ConsoleColor.Green,
+            TerminalStyle.Selected => ConsoleColor.Blue,
             TerminalStyle.Remove => ConsoleColor.Red,
             TerminalStyle.Muted => ConsoleColor.DarkGray,
             _ => (ConsoleColor?)null,

@@ -722,6 +722,104 @@ public class SkillInstallerTests
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Unsafe_manifest_aliases_block_all_changes_and_preserve_handwritten_skills(bool uninstall, bool dryRun)
+    {
+        foreach (var unsafeName in new[] { "...", "....", ".. ", "... ", "our-own-skill.", "our-own-skill " })
+        {
+            using var temp = new TempDirectory();
+            var destination = temp.Combine("dest");
+            _installer.Install(
+                destination,
+                [Skill(temp, "Contoso.Widgets", "2.3.0", "already-installed")],
+                dryRun: false);
+            temp.CreateFile("dest/our-own-skill/SKILL.md", "handwritten guidance");
+            temp.CreateFile("dest/our-own-skill/references/details.md", "handwritten reference");
+            var next = Skill(temp, "Mockly", "1.10.0", "not-installed");
+            var manifest = Path.Combine(destination, InstallManifest.FileName);
+            File.WriteAllText(manifest, $$"""
+                {
+                  "installed": [
+                    {"package":"Contoso.Widgets","version":"2.3.0","skills":["already-installed"]},
+                    {"package":"Mockly","version":"1.10.0","skills":["{{unsafeName}}"]}
+                  ]
+                }
+                """);
+            var before = Snapshot(destination);
+
+            var error = Assert.Throws<PackageSkillsException>(() =>
+            {
+                if (uninstall)
+                {
+                    _installer.Uninstall(destination, packageId: null, packageVersion: null, dryRun);
+                }
+                else
+                {
+                    _installer.Install(destination, [next], dryRun);
+                }
+            });
+
+            Assert.Contains("not a safe skill folder name", error.Message);
+            Assert.Contains("No skills were changed", error.Message);
+            Assert.Contains("preserved", error.Message);
+            Assert.Equal(before, Snapshot(destination));
+            Assert.False(Directory.Exists(Path.Combine(destination, "not-installed")));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Unsafe_candidate_paths_cannot_bypass_manifest_validation_or_prune_existing_skills(bool dryRun)
+    {
+        foreach (var unsafeName in new[] { "...", "..", "our-own-skill.", "our-own-skill ", "../outside" })
+        {
+            using var temp = new TempDirectory();
+            var destination = temp.Combine("dest");
+            _installer.Install(destination, [Skill(temp, "Old", "1.0.0", "old")], dryRun: false);
+            temp.CreateFile("dest/our-own-skill/SKILL.md", "handwritten guidance");
+            temp.CreateFile("outside/SKILL.md", "outside the destination");
+            var next = Skill(temp, "Alpha", "1.0.0", "next");
+            var unsafeSkill = Skill(temp, "Beta", "1.0.0", "source") with
+            {
+                SkillName = unsafeName,
+                RelativePath = unsafeName,
+            };
+            var before = Snapshot(temp.Path);
+
+            var error = Assert.Throws<PackageSkillsException>(() =>
+                _installer.Install(destination, [next, unsafeSkill], dryRun));
+
+            Assert.Contains("safe skill folder", error.Message);
+            Assert.Equal(before, Snapshot(temp.Path));
+        }
+    }
+
+    [Theory]
+    [InlineData(".hidden-skill")]
+    [InlineData("...usage")]
+    [InlineData("skill name")]
+    public void Safe_names_with_dots_or_spaces_remain_installable_and_removable(string skillName)
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest") + Path.DirectorySeparatorChar;
+        var handwritten = temp.CreateFile("dest/our-own-skill/SKILL.md", "ours");
+
+        _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", skillName)], dryRun: false);
+        Assert.True(File.Exists(Path.Combine(destination, skillName, "SKILL.md")));
+
+        var removed = _installer.Uninstall(destination, packageId: null, packageVersion: null, dryRun: false);
+
+        Assert.Equal(skillName, Assert.Single(removed).Skill);
+        Assert.False(Directory.Exists(Path.Combine(destination, skillName)));
+        Assert.False(File.Exists(Path.Combine(destination, InstallManifest.FileName)));
+        Assert.Equal("ours", File.ReadAllText(handwritten));
+    }
+
+    [Theory]
     [InlineData("null")]
     [InlineData("{}")]
     [InlineData("""{"note":"missing ownership data"}""")]
@@ -744,4 +842,11 @@ public class SkillInstallerTests
         Assert.Contains("could not read", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(contents, File.ReadAllText(manifest));
     }
+
+    private static (string Path, string Contents)[] Snapshot(string root) =>
+    [
+        .. Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Select(path => (Path.GetRelativePath(root, path), Convert.ToHexString(File.ReadAllBytes(path)))),
+    ];
 }
