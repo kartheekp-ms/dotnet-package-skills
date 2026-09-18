@@ -58,7 +58,7 @@ internal interface ITerminal
 
     void WriteLine(string text = "");
 
-    /// <summary>Starts a fresh viewport after a resize, without discarding scrollback.</summary>
+    /// <summary>Starts a fresh viewport for the initial frame or a resize, without discarding scrollback.</summary>
     void ClearViewport();
 
     /// <summary>Waits at most the timeout; false lets the picker observe an idle resize.</summary>

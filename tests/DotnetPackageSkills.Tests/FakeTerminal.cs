@@ -124,9 +124,8 @@ internal sealed class FakeTerminal(int windowHeight = 18, int windowWidth = 100)
         var previousTop = _cursorTop;
         var previousLeft = _cursorLeft;
         var wasInteractive = IsInteractiveScreen;
+        // Switching buffers preserves the cursor; the picker must position its own first frame.
         _screen = [];
-        _cursorTop = 0;
-        _cursorLeft = 0;
         IsInteractiveScreen = true;
         ScreenEntries++;
         return new ScreenScope(() =>

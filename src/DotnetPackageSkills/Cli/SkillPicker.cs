@@ -56,7 +56,7 @@ internal sealed class SkillPicker(ITerminal terminal)
         var frameTop = 0;
         var height = 0;
         var frameStarted = false;
-        var resetViewport = false;
+        var resetViewport = true;
         var original = terminal.CaptureState();
         IDisposable? screen = null;
 
@@ -68,7 +68,6 @@ internal sealed class SkillPicker(ITerminal terminal)
             terminal.TreatControlCAsInput = true;
             terminal.ResetStyle();
             frameStarted = true;
-            frameTop = Reserve(layout.MaxFrameHeight);
 
             while (true)
             {
@@ -259,16 +258,6 @@ internal sealed class SkillPicker(ITerminal terminal)
             var next = layout.Pages[target];
             cursor = next.First + Math.Min(pageOffset.Value, next.Count - 1);
         }
-    }
-
-    private int Reserve(int height)
-    {
-        for (var row = 0; row < height; row++)
-        {
-            terminal.WriteLine();
-        }
-
-        return Math.Max(0, terminal.CursorTop - height);
     }
 
     private void Render(

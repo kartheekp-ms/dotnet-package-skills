@@ -167,10 +167,13 @@ Preserve prior scrollback, focus, and selections; never swallow unrelated render
 The picker owns an alternate screen for its entire lifetime. Clearing just the current viewport
 cannot erase old rows that the host has already reflowed into normal history. Restore the original
 screen and output mode on every managed exit, then write the final report on the normal screen.
+Clear and home the alternate viewport before the first frame, just as after a resize. Entering the
+alternate screen can preserve the shell cursor position; reserving space with blank lines then
+leaves a gap above a compact checklist. Never clear the normal screen to fix that gap.
 
 Every render also parks the cursor directly below the last line it drew, rather than at the bottom
-of the rows the frame reserved. That is what the shell prompt lands on if the process dies without
-unwinding — `SkillPickerTests` pins it, and the assertion fails if the parking is removed.
+of the layout's maximum height. `SkillPickerTests` pins that placement for short pages; managed exits
+restore the original shell cursor independently when they leave the alternate screen.
 
 **Picker chrome is ASCII; author text is not restricted to English.** Keep control hints and
 markers ASCII so legacy console encodings do not lose them. Display Unicode descriptions without

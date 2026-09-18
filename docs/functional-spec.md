@@ -193,7 +193,7 @@ In this example, `contoso.widgets-usage` is new, `mockly-usage` is already insta
 - Descriptions wrap beneath the skill text with a small list indent, using the available width. Page sizes reflect rendered lines, not a fixed number of skills. A list that fits needs no paging.
 - Live resizing recalculates wrapping and pagination while preserving focus and selection. Oversized descriptions can be scrolled while their skill row remains visible.
 
-The live checklist is displayed in a temporary terminal screen, separate from the shell's scrollback. On acceptance, cancellation, or a handled error, the original shell screen is restored and receives the final report. The checklist itself is not retained in normal history, preventing host-driven resize reflow from leaving duplicate headings or partial old frames.
+The live checklist is displayed at the top of a temporary terminal screen, separate from the shell's scrollback. Its initial position does not depend on where the shell cursor was before invocation. On acceptance, cancellation, or a handled error, the original shell screen is restored and receives the final report. The checklist itself is not retained in normal history, preventing host-driven resize reflow from leaving duplicate headings or partial old frames.
 
 | Visual cue | Meaning |
 | --- | --- |

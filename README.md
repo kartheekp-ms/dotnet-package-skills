@@ -131,9 +131,10 @@ page in place while preserving the highlighted skill and checked items, even dur
 Old picker frames are not pushed into scrollback. When scrolling an oversized description, the
 skill row stays visible while its continuation lines scroll. Short lists and partial final pages
 do not leave a screenful of blank rows, and a single page has no page counter.
-The live picker uses a temporary terminal screen so host-driven reflow cannot leave duplicate
-copies in normal scrollback. Accepting, cancelling, or a handled failure restores the previous
-shell screen; the final report is written there, not alongside an old checklist.
+The live picker uses a temporary terminal screen and starts at its top, regardless of the shell's
+previous cursor position. Host-driven reflow cannot leave duplicate copies in normal scrollback.
+Accepting, cancelling, or a handled failure restores the previous shell screen; the final report
+is written there, not alongside an old checklist.
 
 Descriptions come from the top-level YAML `description` in each package's `SKILL.md`. Missing
 descriptions say `No description provided.`; unreadable or malformed metadata shows an explicit

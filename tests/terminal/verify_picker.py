@@ -1043,6 +1043,38 @@ class PickerRegression(unittest.TestCase):
                 self.assertEqual(0, terminal.finish(ESC))
                 self.assertEqual(before, snapshot(self.destination))
 
+    def test_first_picker_frame_starts_at_the_top_after_prior_shell_output(self):
+        coordinate = "Demo.Compact@1.0.0"
+        for name in ("compact-01", "compact-02", "compact-03"):
+            directory = self.cache / "demo.compact" / "1.0.0" / "skills" / name
+            directory.mkdir(parents=True)
+            (directory / "SKILL.md").write_text(
+                "---\ndescription: Short guidance for a compact checklist.\n---\n",
+                encoding="utf-8",
+            )
+        for verb in ("install", "uninstall"):
+            if verb == "uninstall":
+                self.cli("install", packages=[coordinate])
+            for no_color in (False, True):
+                with self.subTest(verb=verb, no_color=no_color):
+                    before = snapshot(self.destination)
+                    terminal = self.terminal(
+                        verb, "--dry-run", packages=[coordinate], rows=50, columns=140,
+                        no_color=no_color, powershell=True,
+                    )
+                    terminal.emulator = ReflowEmulator(50, 140)
+                    terminal.ready()
+                    state = terminal.emulator.state
+                    self.assertTrue(state["alternate"])
+                    self.assertTrue(state["active"].startswith("Which skills should"), state["active"])
+                    self.assertNotIn("Which skills should", state["normal"])
+                    self.assertIn("earlier console output", state["normal"])
+                    self.assertEqual(0, terminal.finish(ESC))
+                    self.assertFalse(terminal.emulator.state["alternate"])
+                    self.assertIn("earlier console output", terminal.emulator.state["normal"])
+                    self.assertIn("Cancelled.", terminal.emulator.state["normal"])
+                    self.assertEqual(before, snapshot(self.destination))
+
     def test_resize_reflow_does_not_leave_duplicate_picker_frames_in_normal_scrollback(self):
         before = snapshot(self.destination)
         terminal = self.terminal(rows=70, columns=210, powershell=True)
