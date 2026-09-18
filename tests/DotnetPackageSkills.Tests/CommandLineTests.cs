@@ -1,3 +1,4 @@
+using System.CommandLine;
 using DotnetPackageSkills.Cli;
 using DotnetPackageSkills.Skills;
 
@@ -162,5 +163,111 @@ public class CommandLineTests
     {
         // list writes nothing, so there is nothing to choose between.
         Assert.NotEmpty(CommandLineBuilder.Build().Parse(["list", "--interactive"]).Errors);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Invalid_uninstall_filters_are_rejected_without_printing_terminal_controls(bool interactive)
+    {
+        const string Filter = "Safe\u001b]52;c;SECRET\aPackage";
+        string[] args = interactive
+            ? ["uninstall", "--interactive", "--package", Filter]
+            : ["uninstall", "--package", Filter];
+        var parsed = CommandLineBuilder.Build().Parse(args);
+        Assert.Contains(parsed.Errors, error => error.Message.Contains(Filter, StringComparison.Ordinal));
+        Assert.Equal(Filter, parsed.GetValue<string>("--package"));
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = CommandLineBuilder.Invoke(args, output, error);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("'SafePackage' is not a valid package id.", error.ToString());
+        Assert.DoesNotContain('\u001b', error.ToString());
+        Assert.DoesNotContain('\a', error.ToString());
+        Assert.DoesNotContain("SECRET", error.ToString());
+        Assert.Contains("Usage:", output.ToString());
+    }
+
+    [Fact]
+    public void Uninstall_validation_keeps_multiline_guidance_readable()
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = CommandLineBuilder.Invoke(
+            ["uninstall", "--package", "Mockly@1.*\u001b]52;c;SECRET\a"], output, error);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains(
+            "'1.*' is a floating version or a version range, and this tool needs an exact version.\n" +
+            "Write it out, for example --package Mockly@1.10.0.\n" +
+            "To let restore choose the version, point at a project or solution with --target instead.",
+            error.ToString().ReplaceLineEndings("\n"));
+        Assert.DoesNotContain('\u001b', error.ToString());
+        Assert.DoesNotContain("SECRET", error.ToString());
+    }
+
+    [Theory]
+    [InlineData("--unknown\u001b]52;c;SECRET\a")]
+    [InlineData("--unknown\u009d52;c;SECRET\u009c")]
+    [InlineData("--dry-run=false\u001b]52;c;SECRET\u001b\\")]
+    public void Framework_argument_errors_do_not_emit_terminal_controls(string token)
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = CommandLineBuilder.Invoke(["uninstall", token], output, error);
+
+        Assert.Equal(1, exitCode);
+        Assert.NotEmpty(error.ToString());
+        Assert.DoesNotContain("SECRET", output.ToString() + error.ToString());
+        Assert.DoesNotContain(output.ToString() + error.ToString(),
+            character => char.IsControl(character) && character is not ('\r' or '\n'));
+    }
+
+    [Fact]
+    public void Framework_typo_suggestions_are_sanitized_on_standard_output_too()
+    {
+        const string Token = "uninstal\u001b";
+        var parsed = CommandLineBuilder.Build().Parse([Token]);
+        Assert.Contains(Token, parsed.UnmatchedTokens);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = CommandLineBuilder.Invoke([Token], output, error);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Did you mean", output.ToString());
+        Assert.Contains("uninstall", output.ToString());
+        Assert.Contains("Unrecognized", error.ToString());
+        Assert.DoesNotContain('\u001b', output.ToString() + error.ToString());
+    }
+
+    [Theory]
+    [InlineData("--help", null)]
+    [InlineData("--version", null)]
+    [InlineData("uninstall", "--help")]
+    [InlineData("uninstall", "--missing")]
+    [InlineData("uninstal", null)]
+    public void Ordinary_framework_output_and_exit_codes_are_unchanged(string first, string? second)
+    {
+        string[] args = second is null ? [first] : [first, second];
+        using var expectedOutput = new StringWriter();
+        using var expectedError = new StringWriter();
+        var expectedExitCode = CommandLineBuilder.Build().Parse(args).Invoke(new InvocationConfiguration
+        {
+            Output = expectedOutput,
+            Error = expectedError,
+        });
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = CommandLineBuilder.Invoke(args, output, error);
+
+        Assert.Equal(expectedExitCode, exitCode);
+        Assert.Equal(expectedOutput.ToString(), output.ToString());
+        Assert.Equal(expectedError.ToString(), error.ToString());
     }
 }

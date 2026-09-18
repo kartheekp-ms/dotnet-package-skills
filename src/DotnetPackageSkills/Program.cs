@@ -5,7 +5,7 @@ using DotnetPackageSkills.Infrastructure;
 using DotnetPackageSkills.NuGet;
 using DotnetPackageSkills.Skills;
 
-return CommandLineBuilder.Build().Parse(args).Invoke();
+return CommandLineBuilder.Invoke(args);
 
 namespace DotnetPackageSkills.Cli
 {
@@ -17,6 +17,9 @@ namespace DotnetPackageSkills.Cli
         /// --destination away, which is why this is a default rather than a hard-coded path.
         /// </summary>
         private const string DefaultDestination = ".agents/skills";
+
+        public static int Invoke(string[] args, TextWriter? output = null, TextWriter? error = null) =>
+            CommandLineDiagnostics.Invoke(Build().Parse(args), output ?? Console.Out, error ?? Console.Error);
 
         public static RootCommand Build()
         {

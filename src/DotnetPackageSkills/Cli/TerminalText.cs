@@ -6,7 +6,7 @@ namespace DotnetPackageSkills.Cli;
 /// <summary>Plain terminal text, measured and split at grapheme and display-cell boundaries.</summary>
 internal static class TerminalText
 {
-    public static string Sanitize(string? text, bool multiline = false)
+    public static string Sanitize(string? text, bool multiline = false, bool trim = true)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -55,7 +55,8 @@ internal static class TerminalText
             clean.Append(Rune.IsWhiteSpace(rune) ? " " : rune.ToString());
         }
 
-        return clean.ToString().Trim();
+        var result = clean.ToString();
+        return trim ? result.Trim() : result;
     }
 
     public static int Width(string text) => Elements(text).Sum(element => CellWidth(element));

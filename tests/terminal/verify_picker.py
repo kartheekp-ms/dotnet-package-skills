@@ -357,6 +357,8 @@ class PickerRegression(unittest.TestCase):
         self.cli("install", "--dry-run")
         self.assertEqual(before, snapshot(self.destination))
         self.cli("install")
+        self.assertTrue(self.manifest.is_file())
+        self.assertFalse(self.manifest.is_symlink())
         self.assertEqual(set(self.names), self.installed())
         installed = snapshot(self.destination)
         self.cli("install")
@@ -1138,6 +1140,88 @@ class PickerRegression(unittest.TestCase):
                 self.assertEqual(before, snapshot(self.destination))
         self.cli("list", "--json")
         self.assertEqual(before, snapshot(self.destination))
+
+    def test_manifest_metadata_cannot_inject_terminal_controls_into_human_reports(self):
+        self.cli("install")
+        original = self.manifest.read_text(encoding="utf-8")
+        controls = (
+            "\x1b]52;c;ZWNobyBleGFtcGxl\x07",
+            "\x1b]52;c;ZWNobyBleGFtcGxl\x1b\\",
+            "\x9d52;c;ZWNobyBleGFtcGxl\x9c",
+        )
+        for control in controls:
+            damaged = json.loads(original)
+            owner = damaged["installed"][0]
+            owner["package"] += control
+            owner["version"] += control
+            self.manifest.write_text(json.dumps(damaged), encoding="utf-8")
+            before = snapshot(self.destination)
+            for verb in ("uninstall", "install"):
+                with self.subTest(verb=verb, control=ascii(control)):
+                    result = self.cli(verb, "--dry-run")
+                    self.assert_plain_output(result.stdout)
+                    self.assertIn("Demo.Alpha", result.stdout)
+                    self.assertEqual(before, snapshot(self.destination))
+                    report = json.loads(self.cli(verb, "--dry-run", "--json").stdout)
+                    if verb == "uninstall":
+                        identity = next(skill for skill in report["removed"] if skill["skillName"] == "alpha-01")
+                        self.assertEqual(owner["package"], identity["packageId"])
+                        self.assertEqual(owner["version"], identity["packageVersion"])
+                    else:
+                        self.assertTrue(any(owner["package"] in skill["reason"] for skill in report["skipped"]))
+                    self.assertEqual(before, snapshot(self.destination))
+        result = self.cli("uninstall")
+        self.assert_plain_output(result.stdout)
+        self.assertIn("Removed 25 skills", result.stdout)
+        self.assertTrue((self.destination / "team-owned" / "SKILL.md").is_file())
+
+    def test_operational_errors_cannot_emit_terminal_controls(self):
+        before = snapshot(self.destination)
+        result = self.cli(
+            "install", packages=["Example\x1b]52;c;ZWNobyBleGFtcGxl\x07"], expected=1)
+
+        self.assertEqual("", result.stdout)
+        self.assert_plain_output(result.stderr)
+        self.assertIn("error:", result.stderr)
+        self.assertIn("Id@Version", result.stderr)
+        self.assertEqual(before, snapshot(self.destination))
+
+    def test_parser_diagnostics_cannot_emit_controls_on_either_output_stream(self):
+        before = snapshot(self.destination)
+        controls = (
+            "\x1b]52;c;ZWNobyBleGFtcGxl\x07",
+            "\x1b]52;c;ZWNobyBleGFtcGxl\x1b\\",
+            "\x9d52;c;ZWNobyBleGFtcGxl\x9c",
+        )
+        for control in controls:
+            for arguments in (
+                ["--package", "Ex" + control + "ample"],
+                ["--package", "Demo.Alpha@1.*" + control],
+                ["--unknown" + control],
+                ["--dry-run=false" + control],
+            ):
+                with self.subTest(arguments=ascii(arguments)):
+                    result = self.cli("uninstall", *arguments, expected=1)
+                    self.assert_plain_output(result.stdout)
+                    self.assert_plain_output(result.stderr)
+                    self.assertNotIn("ZWNobyBleGFtcGxl", result.stdout + result.stderr)
+                    self.assertEqual(before, snapshot(self.destination))
+        typo = subprocess.run(
+            [str(OPTIONS.tool), "uninstal\x1b"], cwd=self.root, env=self.environment,
+            capture_output=True, encoding="utf-8", timeout=30,
+        )
+        self.assertEqual(1, typo.returncode)
+        self.assertIn("Did you mean", typo.stdout)
+        self.assert_plain_output(typo.stdout)
+        self.assert_plain_output(typo.stderr)
+        self.assertEqual(before, snapshot(self.destination))
+
+    def assert_plain_output(self, text):
+        self.assertFalse(
+            any(unicodedata.category(character) == "Cc" and character not in "\r\n"
+                or character in "\u202e\u2066" for character in text),
+            "Captured output contains unsafe terminal controls.",
+        )
 
     def test_redirected_interactive_and_json_combinations_remain_rejected(self):
         for verb in ("install", "uninstall"):

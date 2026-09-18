@@ -5,7 +5,7 @@ using DotnetPackageSkills.Skills;
 namespace DotnetPackageSkills.Cli;
 
 /// <summary>Renders results for humans, or as JSON for scripts and agents.</summary>
-public sealed class OutputWriter(TextWriter output)
+public sealed class OutputWriter(TextWriter output, TextWriter? errorOutput = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -86,9 +86,9 @@ public sealed class OutputWriter(TextWriter output)
 
     private void WriteContext(InstallResult result)
     {
-        output.WriteLine($"Target:      {result.Target ?? "(packages named on the command line)"}");
-        output.WriteLine($"NuGet cache: {result.GlobalPackagesFolder}");
-        output.WriteLine($"Destination: {result.Destination}");
+        output.WriteLine($"Target:      {TerminalText.Sanitize(result.Target ?? "(packages named on the command line)")}");
+        output.WriteLine($"NuGet cache: {TerminalText.Sanitize(result.GlobalPackagesFolder)}");
+        output.WriteLine($"Destination: {TerminalText.Sanitize(result.Destination)}");
 
         var scope = result.Target is null ? "named explicitly" : "direct";
 
@@ -109,7 +109,7 @@ public sealed class OutputWriter(TextWriter output)
         foreach (var skill in result.Skipped)
         {
             output.WriteLine($"  {Describe(skill.RelativePath, skill.PackageId, skill.PackageVersion)}");
-            output.WriteLine($"      {skill.Reason}");
+            output.WriteLine($"      {TerminalText.Sanitize(skill.Reason)}");
         }
     }
 
@@ -127,13 +127,13 @@ public sealed class OutputWriter(TextWriter output)
 
         foreach (var package in result.NotOnDisk)
         {
-            output.WriteLine($"  {package}");
+            output.WriteLine($"  {TerminalText.Sanitize(package)}");
         }
     }
 
     public void WriteUninstallReport(IReadOnlyList<TrackedSkill> removed, string destination, bool dryRun)
     {
-        output.WriteLine($"Destination: {destination}");
+        output.WriteLine($"Destination: {TerminalText.Sanitize(destination)}");
         output.WriteLine();
 
         if (removed.Count == 0)
@@ -152,7 +152,8 @@ public sealed class OutputWriter(TextWriter output)
 
     public void WriteError(string message)
     {
-        Console.Error.WriteLine($"error: {message}");
+        var text = TerminalText.Sanitize(message, multiline: true).Replace("\n", Environment.NewLine);
+        (errorOutput ?? Console.Error).WriteLine($"error: {text}");
     }
 
     /// <summary>
@@ -171,7 +172,8 @@ public sealed class OutputWriter(TextWriter output)
     /// This used to be two lines, with "from Package Version" indented underneath. That doubled
     /// the length of every report to carry a word — "from" — that the brackets say for free, and
     /// twelve skills read far more easily as twelve lines than as twenty-four.
+    /// Sanitize fields separately so an unterminated control in one cannot hide the next.
     /// </remarks>
     private static string Describe(string skill, string package, string version) =>
-        $"{skill} ({package} {version})";
+        $"{TerminalText.Sanitize(skill)} ({TerminalText.Sanitize(package)} {TerminalText.Sanitize(version)})";
 }

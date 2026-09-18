@@ -270,6 +270,11 @@ else
 fi
 ```
 
+Human-readable reports and diagnostics, including argument-validation errors and parser suggestions,
+remove terminal escape sequences and unsafe control characters from metadata, paths, and diagnostic
+text. This is display-only: arguments are validated as supplied, and stored identities and JSON
+values are unchanged. JSON uses its normal escaping for control characters.
+
 `--json` cannot be combined with `--interactive`: a script has nobody to answer the prompt.
 
 ## What you get
@@ -326,6 +331,11 @@ warns and preserves that owner rather than transferring it automatically. Explic
 the old skill before installing its replacement. Upgrading the same package remains supported.
 If both the owner and another package offer the same name, installation prefers the owner's
 candidate so the conflict does not prevent a legitimate refresh.
+
+V1 does not reconcile distinct physical case variants on case-sensitive filesystems. Keep authored
+skill-folder casing stable across versions and avoid folders such as `guide` and `GUIDE` in the
+same destination. Case-only renames or collisions between those physical variants can leave
+untracked old copies or overwrite a handwritten variant; those scenarios are outside v1 guarantees.
 
 Refreshing a tracked skill replaces its entire folder, including local edits and added files.
 Keep hand-written guidance in separate, untracked skill folders.
@@ -402,9 +412,9 @@ package.
 
 ### Removal is manifest-driven
 
-`.dotnet-package-skills.json` records exactly what was copied in. Pruning and `uninstall` act only
-on paths listed there, never on whatever happens to be in the destination folder, so skills you
-wrote yourself are never at risk of being deleted.
+`.dotnet-package-skills.json` records what was copied in. Pruning and `uninstall` act on paths listed
+there rather than scanning arbitrary folders for removal. Keep hand-written guidance in separate,
+untracked folders, subject to the v1 case-variant and linked-manifest limitations described here.
 
 If that manifest exists but cannot be read, `install` and `uninstall` stop without changing
 anything and preserve the file for repair. Resolve any merge conflict or restore it from source
@@ -415,6 +425,11 @@ Skill names must identify a single folder directly inside the destination. Names
 or space, including `...`, are rejected because Windows can resolve them to another folder or the
 destination itself. A manifest containing such a name blocks install and uninstall, including
 interactive and dry-run modes, before any skill files or manifest bytes are changed.
+The tool creates an ordinary manifest file by default and updates an existing manifest in place.
+Symbolic-link or other redirected manifests are unsupported in v1. The tool does not create those
+links or protect their targets: normal filesystem operations may follow a link, including one
+already present in a checked-out repository. Use a regular manifest file in the skills destination;
+customers who provide links are responsible for their effects.
 Concurrent tool operations on the same destination are serialized, and an interactive choice
 is rejected if ownership changed before it could be applied.
 

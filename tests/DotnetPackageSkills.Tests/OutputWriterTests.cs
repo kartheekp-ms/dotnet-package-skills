@@ -1,3 +1,4 @@
+using System.Text.Json;
 using DotnetPackageSkills.Cli;
 using DotnetPackageSkills.Skills;
 
@@ -5,6 +6,8 @@ namespace DotnetPackageSkills.Tests;
 
 public class OutputWriterTests
 {
+    private const string ClipboardControl = "\u001b]52;c;ZWNobyBleGFtcGxl\u0007";
+
     [Fact]
     public void The_trust_notice_is_a_single_line()
     {
@@ -143,6 +146,195 @@ public class OutputWriterTests
         Assert.DoesNotContain("ship a skills/ folder", report);
         Assert.Contains("not extracted in the NuGet cache", report);
     }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Install_and_list_reports_sanitize_every_untrusted_display_field(bool copied, bool dryRun)
+    {
+        var clean = ResultWithCollision() with
+        {
+            DryRun = dryRun,
+            Removed = [new TrackedSkill("Old.Package", "1.0.0", "old-skill")],
+            NotOnDisk = ["Ghost.Package 9.9.9"],
+        };
+        var untrusted = clean with
+        {
+            Target = WithControls(clean.Target!),
+            GlobalPackagesFolder = WithControls(clean.GlobalPackagesFolder),
+            Destination = WithControls(clean.Destination),
+            Skills =
+            [
+                .. clean.Skills.Select(skill => skill with
+                {
+                    SkillName = WithControls(skill.SkillName),
+                    RelativePath = WithControls(skill.RelativePath),
+                    PackageId = WithControls(skill.PackageId),
+                    PackageVersion = WithControls(skill.PackageVersion),
+                }),
+            ],
+            Removed =
+            [
+                .. clean.Removed.Select(skill => new TrackedSkill(
+                    WithControls(skill.Package), WithControls(skill.Version), WithControls(skill.Skill))),
+            ],
+            Skipped =
+            [
+                .. clean.Skipped.Select(skill => skill with
+                {
+                    SkillName = WithControls(skill.SkillName),
+                    RelativePath = WithControls(skill.RelativePath),
+                    PackageId = WithControls(skill.PackageId),
+                    PackageVersion = WithControls(skill.PackageVersion),
+                    Reason = WithControls(skill.Reason),
+                }),
+            ],
+            NotOnDisk = [.. clean.NotOnDisk.Select(WithControls)],
+        };
+        using var expected = new StringWriter();
+        using var actual = new StringWriter();
+
+        new OutputWriter(expected).WriteInstallReport(clean, copied);
+        new OutputWriter(actual).WriteInstallReport(untrusted, copied);
+
+        AssertPlainText(actual.ToString());
+        Assert.Equal(expected.ToString(), actual.ToString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Uninstall_reports_strip_clipboard_and_other_terminal_sequences(bool dryRun)
+    {
+        string[] controls =
+        [
+            ClipboardControl,
+            "\u001b]52;c;ZWNobyBleGFtcGxl\u001b\\",
+            "\u009d52;c;ZWNobyBleGFtcGxl\u009c",
+            "\u001b[2J\u001b[H",
+            "\u009b2J",
+            "\u001b]8;;https://invalid.example\u001b\\",
+            "\u001bPignored\u001b\\",
+            "\u0007\u0008\u007f\u202e\u2066",
+        ];
+        using var expected = new StringWriter();
+        new OutputWriter(expected).WriteUninstallReport(
+            [new TrackedSkill("Example.Package", "1.0.0", "example-skill")], @"C:\repo", dryRun);
+
+        foreach (var control in controls)
+        {
+            using var actual = new StringWriter();
+            new OutputWriter(actual).WriteUninstallReport(
+                [new TrackedSkill("Example" + control + ".Package", "1.0" + control + ".0",
+                    "example" + control + "-skill")],
+                @"C:\re" + control + "po", dryRun);
+
+            AssertPlainText(actual.ToString());
+            Assert.Equal(expected.ToString(), actual.ToString());
+        }
+    }
+
+    [Fact]
+    public void An_unterminated_control_in_one_identity_field_cannot_hide_the_following_fields()
+    {
+        using var output = new StringWriter();
+
+        new OutputWriter(output).WriteUninstallReport(
+            [new TrackedSkill("Example\u001b]52;c;unterminated", "1.0.0", "example-skill")],
+            @"C:\repo", dryRun: true);
+
+        AssertPlainText(output.ToString());
+        Assert.Contains("example-skill (Example 1.0.0)", output.ToString());
+    }
+
+    [Fact]
+    public void A_manifest_clipboard_payload_is_safe_to_preview_without_rewriting_identity_or_files()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.CreateDirectory("dest");
+        var skillFile = temp.CreateFile("dest/example-skill/SKILL.md", "installed guidance");
+        var handwritten = temp.CreateFile("dest/our-own-skill/SKILL.md", "handwritten guidance");
+        var package = "Example" + ClipboardControl;
+        var version = "1.0.0" + ClipboardControl;
+        var manifest = temp.CreateFile("dest/.dotnet-package-skills.json", JsonSerializer.Serialize(new
+        {
+            installed = new[] { new { package, version, skills = new[] { "example-skill" } } },
+        }));
+        var before = File.ReadAllBytes(manifest);
+        var removed = new SkillInstaller().Uninstall(destination, null, null, dryRun: true);
+        using var text = new StringWriter();
+        using var json = new StringWriter();
+
+        new OutputWriter(text).WriteUninstallReport(removed, destination, dryRun: true);
+        new OutputWriter(json).WriteJson(JsonReport.ForUninstall(removed, destination, dryRun: true));
+
+        AssertPlainText(text.ToString());
+        Assert.Contains("example-skill (Example 1.0.0)", text.ToString());
+        using var document = JsonDocument.Parse(json.ToString());
+        var identity = document.RootElement.GetProperty("removed")[0];
+        Assert.Equal(package, identity.GetProperty("packageId").GetString());
+        Assert.Equal(version, identity.GetProperty("packageVersion").GetString());
+        Assert.Equal(package, Assert.Single(removed).Package);
+        Assert.Equal(version, Assert.Single(removed).Version);
+        Assert.Equal(before, File.ReadAllBytes(manifest));
+        Assert.Equal("installed guidance", File.ReadAllText(skillFile));
+        Assert.Equal("handwritten guidance", File.ReadAllText(handwritten));
+    }
+
+    [Theory]
+    [InlineData("\r\n")]
+    [InlineData("\n")]
+    [InlineData("\r")]
+    public void Operational_errors_are_sanitized_without_losing_line_breaks_or_stderr_routing(string newline)
+    {
+        using var output = new StringWriter();
+        using var errors = new StringWriter();
+
+        new OutputWriter(output, errors).WriteError(
+            WithControls("Could not read the package.") + newline + WithControls("Restore it and try again."));
+
+        Assert.Empty(output.ToString());
+        AssertPlainText(errors.ToString());
+        Assert.Equal(
+            $"error: Could not read the package.{Environment.NewLine}Restore it and try again.{Environment.NewLine}",
+            errors.ToString());
+    }
+
+    [Fact]
+    public void Newlines_in_report_metadata_cannot_insert_additional_report_rows()
+    {
+        using var output = new StringWriter();
+
+        new OutputWriter(output).WriteUninstallReport(
+            [new TrackedSkill("Example\r\nPackage", "1.0.0", "example-skill")], @"C:\repo", dryRun: true);
+
+        AssertPlainText(output.ToString());
+        Assert.Contains("  example-skill (Example Package 1.0.0)", output.ToString());
+        Assert.Equal(3, output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Length);
+    }
+
+    [Fact]
+    public void Human_reports_preserve_ordinary_unicode_names()
+    {
+        using var output = new StringWriter();
+        const string Skill = "\u6280\u80fd-\U0001f9ea";
+
+        new OutputWriter(output).WriteUninstallReport(
+            [new TrackedSkill("Caf\u00e9.Tools", "1.0.0", Skill)], @"C:\repo", dryRun: true);
+
+        AssertPlainText(output.ToString());
+        Assert.Contains($"{Skill} (Caf\u00e9.Tools 1.0.0)", output.ToString());
+    }
+
+    private static string WithControls(string text) => ClipboardControl + text + "\u001b[0m";
+
+    private static void AssertPlainText(string text) =>
+        Assert.True(
+            !text.Any(character => char.IsControl(character) && character is not ('\r' or '\n') ||
+                character is '\u202e' or '\u2066'),
+            "Captured human-readable output contains unsafe terminal controls.");
 
     private static InstallResult ResultWithCollision() => new()
     {

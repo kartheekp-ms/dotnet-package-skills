@@ -363,6 +363,8 @@ Example: `dotnet package-skills uninstall --package Mockly --json`
 
 **Scripts must check the exit code before parsing stdout.** Operational errors go to stderr and do not produce a JSON success object. Argument/usage errors can also print help on stdout.
 
+Human-readable reports and diagnostics, including argument-validation errors and parser suggestions, remove terminal escape sequences and unsafe control characters from metadata, paths, and diagnostic text. This affects presentation only: arguments are validated as supplied, and stored identities and JSON values remain unchanged, with control characters escaped normally in JSON.
+
 ## 9. Safety, empty results, and errors
 
 | Situation | User-visible behavior |
@@ -397,6 +399,6 @@ Skill metadata is not a security review of the instructions. Developers remain r
 | Encounter another package's owned name | Preserve the installed owner and warn; replacement requires explicit removal first. |
 | Remove selectively | `uninstall -i` offers tracked skills only and removes only checked items. |
 | Use package filters in scripts | Blank filters fail, and normalized version matching is identical with and without `-i`. |
-| Keep locally authored guidance | Installation conflicts and removal never take ownership of untracked skill folders. |
+| Keep locally authored guidance | Keep guidance in separate, untracked skill folders. |
 | Automate reliably | Use JSON plus exit-code handling; distinguish empty success, skipped items, and failure. |
 | Recover from a damaged ownership record | Receive an explicit error; repair or restore the preserved manifest before retrying. |

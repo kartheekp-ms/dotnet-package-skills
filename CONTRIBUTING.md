@@ -69,6 +69,9 @@ file so the user can repair or restore it. `list` may still run because it does 
 or write anything.
 An existing manifest must contain `installed`, and JSON properties and case-insensitive
 destination claims must be unique.
+For v1, use ordinary manifest files and update them in place. The tool does not create symbolic
+links, and linked or redirected manifests are outside the v1 safety guarantees. Do not replace an
+existing manifest with a new inode merely to handle links: that can change Unix ownership or ACLs.
 
 **No tracked skills means no manifest and no folder.** When the last entry goes, `install` and
 `uninstall` both delete `.dotnet-package-skills.json` and drop the destination folder if it is
@@ -176,6 +179,13 @@ terminal control sequences from author-supplied text. All color goes through `IT
 picker uses BOM-less UTF-8 while prompting. Restore the original encoding and terminal styling
 when it exits or fails, so ordinary command output retains its existing behavior.
 
+**Human-readable reports must not execute metadata as terminal commands.** Sanitize each untrusted
+display field with `TerminalText.Sanitize`, including package/version metadata, paths, skipped
+reasons, and operational errors. Framework parser diagnostics and suggestions use a separate output
+path and must be sanitized too, including split writes. Keep multiline error guidance readable.
+Never sanitize arguments before validation, persist sanitized display values, or sanitize serialized
+JSON; canonical identities must remain intact.
+
 **`--package` refuses floating versions and ranges.** Resolving one means choosing a version, and
 the only correct answer comes from a project's restore. `PackageCoordinate.Parse` is the gate.
 
@@ -199,6 +209,10 @@ Keep all discovery candidates internally until install-time ownership is known. 
 current owner's candidate; `list` remains a destination-independent discovery report.
 Package authors avoid collisions by prefixing skill folders with their lowercased package ID, but
 the tool does not enforce that naming convention.
+For v1, retain logical case-insensitive matching without reconciling distinct physical case variants.
+Package authors should keep folder casing stable. Case-only renames and mixed-case physical entries
+on case-sensitive filesystems are outside the v1 ownership guarantees; do not promise safe migration
+or add special reconciliation logic without revisiting that scope.
 
 **Package filters must not broaden destructive operations.** An explicitly blank filter is an
 error; only an absent `--package` means all packages. Interactive and noninteractive uninstall

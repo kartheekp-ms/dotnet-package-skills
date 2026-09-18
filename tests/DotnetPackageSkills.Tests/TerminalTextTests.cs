@@ -143,6 +143,38 @@ public class TerminalTextTests
         Assert.Equal("beforeREDlink next partafter", TerminalText.Sanitize(Text));
     }
 
+    [Fact]
+    public void Sanitizing_trims_boundaries_by_default_but_can_preserve_them()
+    {
+        const string Text = " \t\u001b[31mfirst\u001b[0m\r\n    second \r\n";
+        const string Preserved = "  first\n    second \n";
+
+        Assert.Equal("first\n    second", TerminalText.Sanitize(Text, multiline: true));
+        Assert.Equal("first\n    second", TerminalText.Sanitize(Text, multiline: true, trim: true));
+        Assert.Equal(Preserved, TerminalText.Sanitize(Text, multiline: true, trim: false));
+        Assert.Equal(Preserved.Replace('\n', ' ').Trim(), TerminalText.Sanitize(Text));
+        Assert.Equal(Preserved.Replace('\n', ' '), TerminalText.Sanitize(Text, trim: false));
+    }
+
+    [Theory]
+    [InlineData(null, "")]
+    [InlineData("", "")]
+    [InlineData(" \r\n\t", " \n ")]
+    public void Preserving_boundaries_keeps_blank_text_without_inventing_content(string? text, string expected)
+    {
+        Assert.Equal(string.Empty, TerminalText.Sanitize(text, multiline: true));
+        Assert.Equal(expected, TerminalText.Sanitize(text, multiline: true, trim: false));
+    }
+
+    [Fact]
+    public void Preserving_boundaries_still_discards_unterminated_escape_payloads()
+    {
+        const string Text = "  before  \u001b]52;c;SECRET\r\n";
+
+        Assert.Equal("before", TerminalText.Sanitize(Text, multiline: true));
+        Assert.Equal("  before  ", TerminalText.Sanitize(Text, multiline: true, trim: false));
+    }
+
     [Theory]
     [InlineData("a\x1bPignored\x1b\\b", "ab")]
     [InlineData("a\u009dignored\u009cb", "ab")]
