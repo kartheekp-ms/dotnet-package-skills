@@ -1,6 +1,5 @@
 using System.CommandLine;
 using System.Text;
-using System.Text.Json;
 using DotnetPackageSkills.Cli;
 
 namespace DotnetPackageSkills.Tests;
@@ -153,12 +152,12 @@ public class CommandLineDiagnosticsTests
     }
 
     [Fact]
-    public void Diagnostic_capture_does_not_change_canonical_values_JSON_or_global_console_streams()
+    public void Diagnostic_capture_does_not_change_canonical_values_or_global_console_streams()
     {
         const string Value = "original\u001b[31mvalue\u001b[0m";
         using var output = new StringWriter();
         using var error = new StringWriter();
-        using var report = new StringWriter();
+        string? received = null;
         var consoleOutput = Console.Out;
         var consoleError = Console.Error;
         var argument = new Argument<string>("value");
@@ -167,15 +166,13 @@ public class CommandLineDiagnosticsTests
         {
             Assert.Same(consoleOutput, Console.Out);
             Assert.Same(consoleError, Console.Error);
-            Assert.Equal(Value, result.GetValue(argument));
-            new OutputWriter(report).WriteJson(new { Value = result.GetValue(argument) });
+            received = result.GetValue(argument);
             return 0;
         });
 
         Assert.Equal(0, CommandLineDiagnostics.Invoke(root.Parse([Value]), output, error));
 
-        using var json = JsonDocument.Parse(report.ToString());
-        Assert.Equal(Value, json.RootElement.GetProperty("value").GetString());
+        Assert.Equal(Value, received);
         Assert.Empty(output.ToString());
         Assert.Empty(error.ToString());
     }

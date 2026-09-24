@@ -6,35 +6,48 @@ namespace DotnetPackageSkills.Skills;
 public sealed record InstallOutcome(
     IReadOnlyList<BundledSkill> Installed,
     IReadOnlyList<TrackedSkill> Removed,
-    IReadOnlyList<SkippedSkill> Skipped);
+    IReadOnlyList<SkippedSkill> Skipped)
+{
+    /// <summary>Tracked skills whose package this run did not offer. They were left exactly as they were.</summary>
+    public IReadOnlyList<TrackedSkill> Untouched { get; init; } = [];
+}
 
 /// <summary>Copies discovered skills into the destination and keeps the manifest in step.</summary>
 public sealed class SkillInstaller
 {
     /// <summary>
-    /// Copies every skill into <paramref name="destinationRoot"/>.
+    /// Copies every skill into <paramref name="destinationRoot"/>, refreshing the ones this tool
+    /// already installed.
     /// </summary>
-    /// <param name="prune">
-    /// When true, skills this tool installed previously that are not in
-    /// <paramref name="skills"/> are removed — which is what makes a package upgrade replace
-    /// the old version instead of accumulating beside it. Pass false when the caller named a
-    /// few packages explicitly rather than describing a whole project, because then
-    /// "not in this list" means "not asked about", not "no longer referenced".
+    /// <param name="offered">
+    /// The version this run installs from for each package it covers, by package id. A tracked
+    /// skill is removed only when its package is offered at a different version that no longer
+    /// ships it, which is what lets an upgrade drop a skill instead of keeping a stale copy.
+    /// Tracked skills of packages that are not offered are left alone and reported as
+    /// untouched: a package leaving the project is not a reason to delete its skills here, and
+    /// that cleanup belongs to <c>uninstall --stale</c>. Pass an empty map to only add skills.
+    /// Null offers the packages of <paramref name="skills"/> at their versions.
     /// </param>
-    /// <param name="deselected">
-    /// Destination paths the user explicitly chose not to install. These are removed even when
-    /// <paramref name="prune"/> is false, because pruning is an inference drawn from a complete
-    /// package set whereas a deselection is a direct instruction. Only paths the user was
-    /// actually shown belong here.
+    /// <param name="uninstallCommand">
+    /// Spells the uninstall command that an error suggests, given its arguments, so it can name
+    /// the destination the caller was given.
     /// </param>
     public InstallOutcome Install(
         string destinationRoot,
         IReadOnlyList<BundledSkill> skills,
         bool dryRun,
-        bool prune = true,
-        IReadOnlyCollection<string>? deselected = null,
-        IReadOnlyCollection<TrackedSkill>? expectedInstalled = null)
+        IReadOnlyDictionary<string, string>? offered = null,
+        IReadOnlyCollection<TrackedSkill>? expectedInstalled = null,
+        Func<string, string>? uninstallCommand = null)
     {
+        // Package ids compare without regard to case, whatever comparer the caller's map uses:
+        // the manifest spells them in lowercase, and packages keep NuGet's casing.
+        var versions = offered is null
+            ? skills
+                .GroupBy(skill => skill.PackageId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First().PackageVersion, StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string>(offered, StringComparer.OrdinalIgnoreCase);
+
         using var destinationLock = DestinationLock.Acquire(destinationRoot);
         var manifest = InstallManifest.Load(destinationRoot);
         var trackedSkills = manifest.EnumerateSkills().ToList();
@@ -82,19 +95,39 @@ public sealed class SkillInstaller
             accepted.Add(skill);
         }
 
-        var current = accepted.Select(skill => skill.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var removeAnyway = deselected is null
-            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            : new HashSet<string>(deselected, StringComparer.OrdinalIgnoreCase);
-
-        var stale = trackedSkills
-            .Where(entry => !current.Contains(entry.Skill))
-            .Where(entry => !protectedPaths.Contains(entry.Skill))
-            .Where(entry => prune || removeAnyway.Contains(entry.Skill))
+        // A package moving to a version without one of its skills normally loses that skill.
+        // When another package in this run ships a skill of the same name, removing it would
+        // hand the name to that package, which takes an explicit uninstall. Keeping it would
+        // record the old version's copy under the new version, where no later run removes it.
+        var stranded = trackedSkills
+            .Where(entry => protectedPaths.Contains(entry.Skill))
+            .Where(entry => versions.TryGetValue(entry.Package, out var version) && !SameVersion(version, entry.Version))
+            .Where(entry => !skills.Any(skill => HasSameOwner(entry, skill)))
             .OrderBy(entry => entry.Skill, StringComparer.Ordinal)
             .ToList();
-        var stalePaths = stale.Select(entry => ToAbsolute(destinationRoot, entry.Skill)).ToList();
+
+        if (stranded.Count > 0)
+        {
+            throw NameWouldChangeOwner(
+                stranded,
+                versions,
+                selected,
+                uninstallCommand ?? (arguments => $"dotnet package-skills uninstall {arguments}"));
+        }
+
+        var current = accepted.Select(skill => skill.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // A skill involved in a conflict is never removed by the same run.
+        var removed = trackedSkills
+            .Where(entry => !current.Contains(entry.Skill) && !protectedPaths.Contains(entry.Skill))
+            .Where(entry => versions.TryGetValue(entry.Package, out var version) && !SameVersion(version, entry.Version))
+            .OrderBy(entry => entry.Skill, StringComparer.Ordinal)
+            .ToList();
+        var removedPaths = removed.Select(entry => ToAbsolute(destinationRoot, entry.Skill)).ToList();
+        var untouched = trackedSkills
+            .Where(entry => !versions.ContainsKey(entry.Package))
+            .OrderBy(entry => entry.Skill, StringComparer.Ordinal)
+            .ToList();
 
         foreach (var skill in accepted)
         {
@@ -107,12 +140,26 @@ public sealed class SkillInstaller
             }
         }
 
+        // What stays tracked keeps its entry, moved to the offered version when its package has
+        // one: the manifest records a single version per package, the one this run installed.
+        var kept = trackedSkills
+            .Where(entry => !current.Contains(entry.Skill) && !removed.Contains(entry))
+            .Select(entry => versions.TryGetValue(entry.Package, out var version) ? entry with { Version = version } : entry);
+        var installed = accepted.Select(skill =>
+            new TrackedSkill(skill.PackageId, skill.PackageVersion, skill.SkillName));
+
+        // Build the new ownership record before touching any file, so a record that breaks a
+        // manifest rule stops the operation while the destination is still unchanged.
+        manifest.SetSkills(kept.Concat(installed));
+
+        var outcome = new InstallOutcome(accepted, removed, skipped) { Untouched = untouched };
+
         if (dryRun)
         {
-            return new InstallOutcome(accepted, stale, skipped);
+            return outcome;
         }
 
-        foreach (var path in stalePaths)
+        foreach (var path in removedPaths)
         {
             RemoveSkillDirectory(path);
         }
@@ -122,21 +169,7 @@ public sealed class SkillInstaller
             CopyDirectory(skill.SourcePath, ToAbsolute(destinationRoot, skill.RelativePath));
         }
 
-        var installed = accepted.Select(skill =>
-            new TrackedSkill(skill.PackageId, skill.PackageVersion, skill.SkillName));
-
-        var next = prune
-            ? installed.Concat(trackedSkills.Where(entry => protectedPaths.Contains(entry.Skill)))
-            // Additive: keep what was already tracked, replacing entries we just rewrote and
-            // dropping the ones the user deselected.
-            : trackedSkills
-                .Where(entry => !current.Contains(entry.Skill) &&
-                                (!removeAnyway.Contains(entry.Skill) || protectedPaths.Contains(entry.Skill)))
-                .Concat(installed);
-
-        manifest.SetSkills(next);
-
-        if (manifest.Installed.Count == 0)
+        if (manifest.IsEmpty)
         {
             // Nothing is tracked, so there is nothing for the manifest to be the source of truth
             // about. Match uninstall rather than leaving an empty manifest, and a destination
@@ -150,16 +183,61 @@ public sealed class SkillInstaller
             manifest.Save(destinationRoot);
         }
 
-        return new InstallOutcome(accepted, stale, skipped);
+        return outcome;
+    }
+
+    internal static bool SameVersion(string left, string right) =>
+        PackagePathResolver.NormalizeVersion(left).Equals(PackagePathResolver.NormalizeVersion(right), StringComparison.Ordinal);
+
+    private static PackageSkillsException NameWouldChangeOwner(
+        IReadOnlyList<TrackedSkill> stranded,
+        IReadOnlyDictionary<string, string> versions,
+        IReadOnlyList<BundledSkill> selected,
+        Func<string, string> uninstallCommand)
+    {
+        // The offered map keeps NuGet's casing, which reads better than the manifest's.
+        string OwnerId(TrackedSkill entry) =>
+            versions.Keys.First(id => id.Equals(entry.Package, StringComparison.OrdinalIgnoreCase));
+
+        var reasons = stranded.Select(entry =>
+        {
+            var other = selected.FirstOrDefault(skill =>
+                skill.RelativePath.Equals(entry.Skill, StringComparison.OrdinalIgnoreCase));
+            return $"{OwnerId(entry)} {versions[entry.Package]} no longer ships the installed skill '{entry.Skill}', " +
+                   $"and {(other is null ? "another package" : $"{other.PackageId} {other.PackageVersion}")} " +
+                   "ships a skill with that name";
+        });
+        var owners = stranded.Select(OwnerId).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var command = owners.Count == 1
+            ? $"'{uninstallCommand($"--package {owners[0]}")}'"
+            : $"'{uninstallCommand("--package <ID>")}' for each of {string.Join(", ", owners)}";
+
+        return new PackageSkillsException(
+            $"Cannot install skills because {string.Join("; ", reasons)}. The tool doesn't hand an installed " +
+            "skill to another package, and the manifest records one version per package, so it can't keep the " +
+            $"older copy either. Run {command} first, and then try again. No skills were changed.");
     }
 
     /// <summary>
+    /// A tracked skill is stale when the target references no package at its installed version:
+    /// the package left the project, or the project now uses another version of it.
+    /// </summary>
+    internal static bool IsStale(TrackedSkill entry, IEnumerable<PackageReferenceInfo> referenced) =>
+        !referenced.Any(package =>
+            package.Id.Equals(entry.Package, StringComparison.OrdinalIgnoreCase) &&
+            SameVersion(package.Version, entry.Version));
+
+    /// <summary>
     /// Removes skills this tool installed, narrowed to one package, one exact version of it,
-    /// or an explicit set of skill names.
+    /// an explicit set of skill names, or the skills that are stale against a target.
     /// </summary>
     /// <param name="only">
     /// Skill folder names to remove. Null removes everything the other filters match, which is
     /// what an unattended uninstall does; a set is what the interactive picker returns.
+    /// </param>
+    /// <param name="staleAgainst">
+    /// A target's direct package references. When given, only skills whose installed version
+    /// the target does not reference are removed.
     /// </param>
     public IReadOnlyList<TrackedSkill> Uninstall(
         string destinationRoot,
@@ -167,7 +245,8 @@ public sealed class SkillInstaller
         string? packageVersion,
         bool dryRun,
         IReadOnlyCollection<string>? only = null,
-        IReadOnlyCollection<TrackedSkill>? expectedInstalled = null)
+        IReadOnlyCollection<TrackedSkill>? expectedInstalled = null,
+        IReadOnlyCollection<PackageReferenceInfo>? staleAgainst = null)
     {
         using var destinationLock = DestinationLock.Acquire(destinationRoot);
         var manifest = InstallManifest.Load(destinationRoot);
@@ -180,6 +259,7 @@ public sealed class SkillInstaller
         CheckOwnershipSnapshot(trackedSkills, expectedInstalled);
         var targeted = trackedSkills
             .Where(entry => Matches(entry, packageId, packageVersion))
+            .Where(entry => staleAgainst is null || IsStale(entry, staleAgainst))
             .Where(entry => chosen is null || chosen.Contains(entry.Skill))
             .OrderBy(entry => entry.Skill, StringComparer.Ordinal)
             .ToList();
@@ -190,14 +270,14 @@ public sealed class SkillInstaller
             return targeted;
         }
 
+        manifest.SetSkills(trackedSkills.Except(targeted));
+
         foreach (var path in targetedPaths)
         {
             RemoveSkillDirectory(path);
         }
 
-        manifest.SetSkills(trackedSkills.Except(targeted));
-
-        if (manifest.Installed.Count == 0)
+        if (manifest.IsEmpty)
         {
             InstallManifest.Delete(destinationRoot);
             TryRemoveEmptyDirectory(destinationRoot);

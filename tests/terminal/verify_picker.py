@@ -187,6 +187,9 @@ class Terminal:
 
     def finish(self, keys=ENTER):
         self.process.write(keys)
+        return self.exit_status()
+
+    def exit_status(self):
         self.wait_for(lambda: self.ended, "process exit")
         # Close before querying status: PtyProcess.wait() marks the object closed without
         # releasing its reader sockets in pywinpty 3.0.5.
@@ -295,16 +298,25 @@ class PickerRegression(unittest.TestCase):
             else:
                 for package in packages or ["Demo.Alpha@1.0.0", "Demo.Beta@2.0.0"]:
                     args += ["--package", package]
+        elif "--stale" in extra and self.target is not None:
+            args += ["--target", str(self.target), "--no-restore"]
         return args + list(extra)
 
     def cli(self, verb, *extra, packages=None, expected=0):
         result = subprocess.run(
             self.command(verb, *extra, packages=packages),
             cwd=self.root, env=self.environment, capture_output=True,
-            encoding="utf-8", timeout=30,
+            encoding="utf-8", errors="replace", timeout=30,
         )
         self.assertEqual(expected, result.returncode, result.stdout + result.stderr)
         return result
+
+    def suggested(self, arguments, with_target=False):
+        """The uninstall command the tool suggests, with this fixture's target and destination."""
+        command = f"dotnet package-skills uninstall {arguments}"
+        if with_target and self.target is not None:
+            command += f' --target "{self.target}"'
+        return command + f' --destination "{self.destination}"'
 
     def terminal(self, verb="install", *extra, packages=None, rows=24, columns=100, no_color=False,
                  powershell=False):
@@ -329,11 +341,17 @@ class PickerRegression(unittest.TestCase):
         self.addCleanup(terminal.close)
         return terminal
 
-    def installed(self):
+    def manifest_packages(self):
         if not self.manifest.exists():
-            return set()
-        manifest = json.loads(self.manifest.read_text(encoding="utf-8-sig"))
-        return {name for package in manifest["installed"] for name in package["skills"]}
+            return {}
+        return json.loads(self.manifest.read_text(encoding="utf-8-sig"))["packages"]
+
+    def installed(self):
+        return {name for package in self.manifest_packages().values() for name in package["skills"]}
+
+    def assert_shown(self, expected, terminal):
+        """Checks text the console may have wrapped mid-word by ignoring all whitespace."""
+        self.assertIn(re.sub(r"\s+", "", expected), re.sub(r"\s+", "", terminal.text), terminal.text)
 
     def assert_frame(self, terminal):
         self.assertIn("Which skills should", terminal.compact)
@@ -346,46 +364,60 @@ class PickerRegression(unittest.TestCase):
         self.assertNotIn("(Demo.Beta 2.0.0)", terminal.text)
         self.assertIn("selected", terminal.text)
 
-    def test_plain_commands_and_json_contract_do_not_gain_descriptions(self):
+    def test_plain_commands_do_not_gain_descriptions_and_write_an_lf_manifest(self):
         before = snapshot(self.destination)
-        result = json.loads(self.cli("list", "--json").stdout)
-        self.assertEqual(25, len(result["skills"]))
-        expected_keys = {"packageId", "packageVersion", "skillName", "sourcePath", "relativePath"}
-        for skill in result["skills"]:
-            self.assertEqual(expected_keys, set(skill))
+        listed = self.cli("list").stdout
+        for name in self.names:
+            self.assertIn(name, listed)
+        self.assertNotIn("ALPHA-FIRST", listed)
+        self.assertNotIn("Guidance for", listed)
         self.assertEqual(before, snapshot(self.destination))
         self.cli("install", "--dry-run")
         self.assertEqual(before, snapshot(self.destination))
-        self.cli("install")
+        result = self.cli("install")
+        self.assertIn("Copied 25 skills", result.stdout)
+        self.assertNotIn("ALPHA-FIRST", result.stdout)
         self.assertTrue(self.manifest.is_file())
         self.assertFalse(self.manifest.is_symlink())
         self.assertEqual(set(self.names), self.installed())
+        raw = self.manifest.read_bytes()
+        self.assertNotIn(b"\r", raw)
+        self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
+        self.assertTrue(raw.endswith(b"}\n"))
+        self.assertEqual(
+            {
+                "version": 1,
+                "packages": {
+                    "demo.alpha": {"version": "1.0.0", "skills": [f"alpha-{n:02}" for n in range(1, 16)]},
+                    "demo.beta": {"version": "2.0.0", "skills": [f"beta-{n:02}" for n in range(1, 11)]},
+                },
+            },
+            json.loads(raw),
+        )
         installed = snapshot(self.destination)
         self.cli("install")
         self.assertEqual(installed, snapshot(self.destination))
         self.cli("uninstall", "--dry-run")
         self.assertEqual(installed, snapshot(self.destination))
-        removed = json.loads(self.cli("uninstall", "--json").stdout)["removed"]
-        self.assertEqual(25, len(removed))
-        for skill in removed:
-            self.assertEqual({"packageId", "packageVersion", "skillName", "relativePath"}, set(skill))
+        self.assertIn("Removed 25 skills", self.cli("uninstall").stdout)
         self.assertEqual(before, snapshot(self.destination))
 
     def prepare_project(self):
         feed = self.root / "local feed"
         feed.mkdir()
-        for package, version in (("Demo.Alpha", "1.0.0"), ("Demo.Beta", "2.0.0")):
-            source = self.cache / package.lower() / version
-            with ZipFile(feed / f"{package}.{version}.nupkg", "w") as archive:
-                archive.writestr(
-                    f"{package}.nuspec",
-                    f'<?xml version="1.0"?><package><metadata><id>{package}</id>'
-                    f"<version>{version}</version><authors>Regression fixture</authors>"
-                    "<description>Local terminal test fixture.</description></metadata></package>",
-                )
-                for path in source.rglob("*"):
-                    if path.is_file():
-                        archive.write(path, path.relative_to(source).as_posix())
+        for package in ("Demo.Alpha", "Demo.Beta"):
+            for source in sorted((self.cache / package.lower()).iterdir()):
+                version = source.name
+                with ZipFile(feed / f"{package}.{version}.nupkg", "w") as archive:
+                    archive.writestr(
+                        f"{package}.nuspec",
+                        f'<?xml version="1.0"?><package><metadata><id>{package}</id>'
+                        f"<version>{version}</version><authors>Regression fixture</authors>"
+                        "<description>Local terminal test fixture.</description></metadata></package>",
+                    )
+                    for path in source.rglob("*"):
+                        if path.is_file():
+                            archive.write(path, path.relative_to(source).as_posix())
         project = self.root / "My App"
         project.mkdir()
         project_file = project / "App.csproj"
@@ -419,51 +451,89 @@ class PickerRegression(unittest.TestCase):
         restore()
         return project_file, project_xml, beta_reference, restore
 
-    def test_restored_solution_supports_descriptions_and_project_scoped_pruning(self):
+    def test_restored_solution_keeps_unreferenced_skills_until_uninstall_stale(self):
         project_file, project_xml, beta_reference, restore = self.prepare_project()
-        listed = json.loads(self.cli("list", "--json").stdout)
-        self.assertEqual(25, len(listed["skills"]))
-        self.assertEqual(str(self.target), listed["target"])
+        listed = self.cli("list").stdout
+        self.assertIn(f"Target:      {self.target}", listed)
+        for name in self.names:
+            self.assertIn(name, listed)
         terminal = self.terminal().ready()
         self.assertIn("App.slnx", terminal.text)
         self.assertIn("ALPHA-FIRST", terminal.text)
         terminal.press(SPACE)
         self.assertEqual(0, terminal.finish())
         self.assertEqual({"alpha-01"}, self.installed())
+
+        terminal = self.terminal().ready()
+        self.assertIn("Installed skills aren't listed.", terminal.compact)
+        self.assertIn("0 of 24 selected", terminal.compact)
+        self.assertIn("alpha-02", terminal.focused)
+        self.assertNotIn("ALPHA-FIRST", terminal.text)
+        self.assertEqual(0, terminal.finish(ESC))
+
         self.cli("install")
         self.assertEqual(set(self.names), self.installed())
         project_file.write_text(project_xml.replace(beta_reference, ""), encoding="utf-8")
         restore()
-        removed = json.loads(self.cli("install", "--dry-run", "--json").stdout)["removed"]
-        self.assertEqual({f"beta-{number:02}" for number in range(1, 11)}, {s["skillName"] for s in removed})
-        self.assertEqual(set(self.names), self.installed())
-        self.cli("install")
+        before = snapshot(self.destination)
+        for flags in (["--dry-run"], []):
+            with self.subTest(flags=flags):
+                result = self.cli("install", *flags)
+                self.assertIn(
+                    "10 installed skills belong to a package that the target no longer references:",
+                    result.stdout)
+                self.assertIn("  beta-10 (demo.beta 2.0.0)", result.stdout)
+                self.assertIn(f"Run '{self.suggested('--stale', with_target=True)}' to remove them.", result.stdout)
+                self.assertNotIn("Removed", result.stdout)
+                self.assertEqual(before, snapshot(self.destination))
+
+        preview = self.cli("uninstall", "--stale", "--dry-run").stdout
+        self.assertIn(f"Target:      {self.target}", preview)
+        self.assertIn("Would remove 10 skills:", preview)
+        self.assertEqual(before, snapshot(self.destination))
+        self.assertIn("Removed 10 skills:", self.cli("uninstall", "--stale").stdout)
         self.assertEqual({f"alpha-{number:02}" for number in range(1, 16)}, self.installed())
         self.assertTrue((self.destination / "team-owned" / "SKILL.md").exists())
+        self.assertIn("No stale skills were found.", self.cli("uninstall", "--stale").stdout)
+        self.assertNotIn("uninstall --stale", self.cli("install").stdout)
 
-    def test_target_picker_keeps_stale_skills_until_their_own_rows_are_unchecked(self):
+    def test_interactive_install_stops_until_stale_skills_are_uninstalled(self):
         project_file, project_xml, beta_reference, restore = self.prepare_project()
         self.cli("install")
-        before = snapshot(self.destination)
         project_file.write_text(project_xml.replace(beta_reference, ""), encoding="utf-8")
         restore()
+        before = snapshot(self.destination)
 
-        terminal = self.terminal().ready()
-        self.assertIn("25 of 25 selected", terminal.compact)
-        self.assertIn("0 to remove", terminal.compact)
-        terminal.press(END, lambda: "beta-10" in terminal.focused, "retained stale skill")
-        self.assertIn("[X]", terminal.focused)
-        self.assertIn("Installed copy; kept unless you uncheck it.", terminal.compact)
-        self.assertEqual(0, terminal.finish())
+        terminal = self.terminal()
+        self.assertEqual(1, terminal.exit_status())
+        self.assertNotIn("Which skills should", terminal.text)
+        self.assert_shown("10 installed skills don't match the target", terminal)
+        self.assert_shown(f"Run '{self.suggested('--stale', with_target=True)}' first", terminal)
         self.assertEqual(before, snapshot(self.destination))
 
-        terminal = self.terminal().ready()
-        terminal.press(END, lambda: "beta-10" in terminal.focused, "explicit stale removal")
-        terminal.press(SPACE, lambda: "1 to remove" in terminal.compact, "one visible removal")
+        terminal = self.terminal("uninstall", "--stale").ready()
+        self.assertIn("Only skills that don't match the target are listed.", terminal.compact)
+        self.assertIn("0 of 10 selected", terminal.compact)
+        self.assertNotIn("alpha-", terminal.text)
+        terminal.press(END, lambda: "beta-10" in terminal.focused, "last stale skill")
+        terminal.press(SPACE, lambda: "1 to remove" in terminal.compact, "one stale removal")
         self.assertEqual(0, terminal.finish())
+        self.assertIn("Removed 1 skill", terminal.text)
         self.assertEqual(set(self.names) - {"beta-10"}, self.installed())
 
-    def test_empty_target_discovery_still_offers_existing_skills_and_never_implicitly_prunes(self):
+        terminal = self.terminal()
+        self.assertEqual(1, terminal.exit_status())
+        self.assert_shown("9 installed skills don't match the target", terminal)
+
+        self.cli("uninstall", "--stale")
+        before = snapshot(self.destination)
+        terminal = self.terminal()
+        self.assertEqual(0, terminal.exit_status())
+        self.assertNotIn("Which skills should", terminal.text)
+        self.assert_shown("Nothing new to install. Every skill that these packages ship is already installed.", terminal)
+        self.assertEqual(before, snapshot(self.destination))
+
+    def test_empty_target_never_removes_skills_and_points_to_uninstall_stale(self):
         project_file, project_xml, beta_reference, restore = self.prepare_project()
         self.cli("install")
         before = snapshot(self.destination)
@@ -474,17 +544,30 @@ class PickerRegression(unittest.TestCase):
         )
         restore()
 
-        terminal = self.terminal().ready()
-        self.assertIn("25 of 25 selected", terminal.compact)
-        self.assertIn("0 to remove", terminal.compact)
-        self.assertIn("Installed copy; kept unless you uncheck it.", terminal.compact)
-        self.assertEqual(0, terminal.finish())
+        result = self.cli("install")
+        self.assertIn("No bundled skills found.", result.stdout)
+        self.assertIn(
+            "25 installed skills belong to packages that the target no longer references:", result.stdout)
         self.assertEqual(before, snapshot(self.destination))
 
-        terminal = self.terminal().ready()
-        terminal.press(SPACE, lambda: "1 to remove" in terminal.compact, "explicit removal with no candidates")
-        self.assertEqual(0, terminal.finish())
-        self.assertEqual(set(self.names) - {"alpha-01"}, self.installed())
+        terminal = self.terminal()
+        self.assertEqual(1, terminal.exit_status())
+        self.assert_shown("25 installed skills don't match the target", terminal)
+        self.assertEqual(before, snapshot(self.destination))
+
+        self.assertIn("Removed 25 skills:", self.cli("uninstall", "--stale").stdout)
+        self.assertEqual(set(), self.installed())
+        self.assertFalse(self.manifest.exists())
+        self.assertTrue((self.destination / "team-owned" / "SKILL.md").exists())
+
+    def test_uninstall_stale_needs_a_solution_or_project(self):
+        self.cli("install")
+        before = snapshot(self.destination)
+        for flags in ([], ["--dry-run"]):
+            with self.subTest(flags=flags):
+                result = self.cli("uninstall", "--stale", *flags, expected=1)
+                self.assertIn("No solution or project found", result.stderr)
+                self.assertEqual(before, snapshot(self.destination))
 
     def test_incomplete_target_discovery_fails_before_writes_in_all_install_modes(self):
         self.prepare_project()
@@ -494,15 +577,16 @@ class PickerRegression(unittest.TestCase):
         available = self.cache / "demo.alpha" / "1.0.0" / "skills" / "alpha-01" / "SKILL.md"
         available.write_text("---\ndescription: Must not be copied during incomplete discovery.\n---\n", encoding="utf-8")
 
-        for flags in ([], ["--dry-run"], ["--json"], ["-i"], ["-i", "--dry-run"]):
+        for flags in ([], ["--dry-run"], ["-i"], ["-i", "--dry-run"]):
             with self.subTest(flags=flags):
                 result = self.cli("install", *flags, expected=1)
                 self.assertIn("resolved packages are missing", result.stderr)
                 self.assertIn("Demo.Beta 2.0.0", result.stderr)
                 self.assertEqual("", result.stdout)
                 self.assertEqual(before, snapshot(self.destination))
-        listed = json.loads(self.cli("list", "--json").stdout)
-        self.assertEqual(["Demo.Beta 2.0.0"], listed["notOnDisk"])
+        listed = self.cli("list").stdout
+        self.assertIn("alpha-01", listed)
+        self.assertNotIn("beta-01", listed)
 
         (self.cache / "demo.alpha").rename(self.cache / "demo.alpha-moved-aside")
         result = self.cli("install", "-i", expected=1)
@@ -518,8 +602,8 @@ class PickerRegression(unittest.TestCase):
 
     def shared_owner(self):
         return next(
-            item["package"] for item in json.loads(self.manifest.read_text(encoding="utf-8"))["installed"]
-            if "shared-skill" in item["skills"]
+            package for package, entry in self.manifest_packages().items()
+            if "shared-skill" in entry["skills"]
         )
 
     def test_package_filtered_picker_cannot_offer_or_remove_another_packages_shared_name(self):
@@ -533,7 +617,7 @@ class PickerRegression(unittest.TestCase):
         terminal.press("c")
         self.assertEqual(0, terminal.finish())
         self.assertEqual(before, snapshot(self.destination))
-        self.assertEqual("Demo.Alpha", self.shared_owner())
+        self.assertEqual("demo.alpha", self.shared_owner())
         self.assertIn("Warning: skipped 1 colliding skill", terminal.text)
 
     def test_target_collision_preserves_ownership_until_explicit_uninstall(self):
@@ -547,33 +631,36 @@ class PickerRegression(unittest.TestCase):
         )
         restore()
 
-        result = json.loads(self.cli("install", "--json").stdout)
-        self.assertEqual(1, len(result["skipped"]))
-        self.assertEqual("shared-skill", result["skipped"][0]["skillName"])
-        self.assertNotIn("shared-skill", {entry["skillName"] for entry in result["removed"]})
-        self.assertEqual("Demo.Alpha", self.shared_owner())
+        result = self.cli("install").stdout
+        self.assertIn("Warning: skipped 1 colliding skill:", result)
+        self.assertIn("  shared-skill (Demo.Beta 2.0.0)", result)
+        self.assertIn("managed for demo.alpha 1.0.0", result)
+        self.assertIn(
+            "16 installed skills belong to a package that the target no longer references:", result)
+        self.assertNotIn("Removed", result)
+        self.assertEqual("demo.alpha", self.shared_owner())
         self.assertEqual(shared, (self.destination / "shared-skill" / "SKILL.md").read_bytes())
 
         self.cli("uninstall", "--package", "Demo.Alpha")
         self.cli("install")
-        self.assertEqual("Demo.Beta", self.shared_owner())
+        self.assertEqual("demo.beta", self.shared_owner())
 
     def test_blank_and_missing_uninstall_filters_cannot_broaden_removal(self):
         self.cli("install")
         before = snapshot(self.destination)
         for value in ("", " ", "\t"):
-            for flags in ([], ["--json"], ["--dry-run"], ["-i"]):
+            for flags in ([], ["--dry-run"], ["-i"]):
                 with self.subTest(value=value, flags=flags):
                     result = self.cli("uninstall", "--package", value, *flags, expected=1)
                     self.assertIn("non-empty package ID", result.stderr)
                     self.assertEqual(before, snapshot(self.destination))
-        for flags in ([], ["--dry-run"], ["--json"], ["-i"]):
+        for flags in ([], ["--dry-run"], ["-i"]):
             result = self.cli("uninstall", "--package", *flags, expected=1)
             self.assertTrue(result.stderr.strip())
             self.assertEqual(before, snapshot(self.destination))
         for repeated in ("--package", "-p", "--package=", "--package=Demo.Alpha"):
             result = self.cli(
-                "uninstall", "--json", "--package", "Demo.Alpha", repeated, expected=1)
+                "uninstall", "--package", "Demo.Alpha", repeated, expected=1)
             self.assertTrue(result.stderr.strip())
             self.assertEqual(before, snapshot(self.destination))
 
@@ -581,9 +668,14 @@ class PickerRegression(unittest.TestCase):
         self.cli("install")
         original = self.manifest.read_text(encoding="utf-8")
         duplicate = json.loads(original)
-        duplicate["installed"].append(
-            {"package": "Other.Owner", "version": "1.0.0", "skills": ["ALPHA-01"]})
-        for damaged in ("{}", '{"installed":[],"Installed":[]}', json.dumps(duplicate)):
+        duplicate["packages"]["other.owner"] = {"version": "1.0.0", "skills": ["ALPHA-01"]}
+        for damaged in (
+            "{}",
+            '{"version":1,"packages":{},"Packages":{}}',
+            json.dumps(duplicate),
+            original.replace('"demo.beta"', '"Demo.Alpha"'),
+            '{"installed":[{"package":"Demo.Alpha","version":"1.0.0","skills":["alpha-01"]}]}',
+        ):
             self.manifest.write_text(damaged, encoding="utf-8")
             before = snapshot(self.destination)
             for verb, flags in (
@@ -594,7 +686,7 @@ class PickerRegression(unittest.TestCase):
                     result = self.cli(verb, *flags, expected=1)
                     self.assertIn("Could not read the install manifest", result.stderr)
                     self.assertEqual(before, snapshot(self.destination))
-            self.cli("list", "--json")
+            self.cli("list")
 
     def test_unsafe_manifest_names_fail_before_prompting_or_writing(self):
         self.prepare_project()
@@ -602,13 +694,11 @@ class PickerRegression(unittest.TestCase):
         original = self.manifest.read_text(encoding="utf-8")
         for unsafe_name in ("...", ".. ", "team-owned.", "team-owned "):
             damaged = json.loads(original)
-            damaged["installed"].append(
-                {"package": "Unsafe.Owner", "version": "1.0.0", "skills": [unsafe_name]})
+            damaged["packages"]["unsafe.owner"] = {"version": "1.0.0", "skills": [unsafe_name]}
             self.manifest.write_text(json.dumps(damaged), encoding="utf-8")
             before = snapshot(self.destination)
             for verb in ("install", "uninstall"):
-                for flags in ([], ["--json"], ["--dry-run"], ["--dry-run", "--json"],
-                              ["-i"], ["-i", "--dry-run"]):
+                for flags in ([], ["--dry-run"], ["-i"], ["-i", "--dry-run"]):
                     with self.subTest(unsafe_name=unsafe_name, verb=verb, flags=flags):
                         result = self.cli(verb, *flags, expected=1)
                         self.assertEqual("", result.stdout)
@@ -616,7 +706,7 @@ class PickerRegression(unittest.TestCase):
                         self.assertIn("No skills were changed", result.stderr)
                         self.assertIn("preserved", result.stderr)
                         self.assertEqual(before, snapshot(self.destination))
-            self.cli("list", "--json")
+            self.cli("list")
             self.assertEqual(before, snapshot(self.destination))
 
     def test_current_owner_refresh_is_not_blocked_by_an_earlier_named_collision(self):
@@ -626,38 +716,147 @@ class PickerRegression(unittest.TestCase):
         owned_source.write_text("---\ndescription: Updated owner guidance.\n---\n", encoding="utf-8")
         self.prepare_project()
 
-        preview = json.loads(self.cli("install", "--dry-run", "--json").stdout)
-        shared = next(skill for skill in preview["skills"] if skill["skillName"] == "shared-skill")
-        self.assertEqual("Demo.Beta", shared["packageId"])
         terminal = self.terminal().ready()
-        terminal.press(END, lambda: "shared-skill" in terminal.focused, "existing owner candidate")
-        self.assertIn("Updated owner guidance.", terminal.compact)
-        self.assertNotIn("Installed copy;", terminal.focused)
-        self.assertEqual(0, terminal.finish())
-        self.assertEqual("Demo.Beta", self.shared_owner())
+        self.assertIn("0 of 15 selected", terminal.compact)
+        terminal.press(END, lambda: "alpha-15" in terminal.focused, "last skill that isn't installed")
+        self.assertNotIn("shared-skill", terminal.text)
+        self.assertEqual(0, terminal.finish(ESC))
+        self.assertNotIn("Updated owner guidance.", (self.destination / "shared-skill" / "SKILL.md").read_text())
+
+        result = self.cli("install").stdout
+        self.assertIn("  shared-skill (Demo.Beta 2.0.0)", result)
+        self.assertIn("  shared-skill (Demo.Alpha 1.0.0)", result.split("Warning: skipped")[1])
+        self.assertIn("which belongs to the current owner", result)
+        self.assertEqual("demo.beta", self.shared_owner())
         self.assertIn("Updated owner guidance.", (self.destination / "shared-skill" / "SKILL.md").read_text())
 
     def test_repeated_equivalent_coordinates_do_not_self_collide(self):
-        result = json.loads(self.cli(
-            "install", "--json",
-            packages=["Demo.Alpha@1.0", "demo.alpha@1.0.0", "Demo.Alpha@1.0.0.0"]).stdout)
-        self.assertEqual(1, result["packagesScanned"])
-        self.assertEqual(15, len(result["skills"]))
-        self.assertEqual([], result["skipped"])
+        result = self.cli(
+            "install", packages=["Demo.Alpha@1.0", "demo.alpha@1.0.0", "Demo.Alpha@1.0.0.0"]).stdout
+        self.assertIn("Scanned 1 package (named explicitly).", result)
+        self.assertIn("Copied 15 skills:", result)
+        self.assertNotIn("Warning", result)
+        self.assertEqual(["demo.alpha"], list(self.manifest_packages()))
+        self.assertEqual("1.0.0", self.manifest_packages()["demo.alpha"]["version"])
 
-    def test_install_reports_removed_tracking_even_when_the_folder_is_already_gone(self):
-        self.prepare_project()
-        self.cli("install")
+    def test_version_change_removes_dropped_skills_even_when_the_folder_is_already_gone(self):
+        self.cli("install", packages=["Demo.Beta@2.0.0"])
+        for number in range(1, 10):
+            directory = self.cache / "demo.beta" / "3.0.0" / "skills" / f"beta-{number:02}"
+            directory.mkdir(parents=True)
+            (directory / "SKILL.md").write_text(
+                f"---\ndescription: beta-{number:02} for 3.0.\n---\n", encoding="utf-8")
         target = self.destination / "beta-10"
         for file in target.iterdir():
             file.unlink()
         target.rmdir()
-        terminal = self.terminal().ready()
-        terminal.focus("beta-10", 24)
-        terminal.press(SPACE, lambda: "1 to remove" in terminal.compact, "remove missing tracked folder")
+
+        result = self.cli("install", packages=["Demo.Beta@3.0.0"]).stdout
+        self.assertIn("Copied 9 skills:", result)
+        self.assertIn("Removed 1 skill:\n  beta-10 (demo.beta 2.0.0)", result)
+        self.assertEqual(
+            {"demo.beta": {"version": "3.0.0", "skills": [f"beta-{n:02}" for n in range(1, 10)]}},
+            self.manifest_packages(),
+        )
+        self.assertIn("for 3.0.", (self.destination / "beta-01" / "SKILL.md").read_text(encoding="utf-8"))
+        self.assertTrue((self.destination / "team-owned" / "SKILL.md").exists())
+
+    def test_interactive_install_cannot_change_an_installed_package_version(self):
+        self.cli("install", packages=["Demo.Beta@2.0.0"])
+        newer = self.cache / "demo.beta" / "3.0.0" / "skills" / "beta-11"
+        newer.mkdir(parents=True)
+        (newer / "SKILL.md").write_text("---\ndescription: Only in 3.0.\n---\n", encoding="utf-8")
+        before = snapshot(self.destination)
+
+        terminal = self.terminal(packages=["Demo.Beta@3.0.0"])
+        self.assertEqual(1, terminal.exit_status())
+        self.assertNotIn("Which skills should", terminal.text)
+        self.assert_shown("Demo.Beta 2.0.0 is already installed", terminal)
+        self.assert_shown(f"Run '{self.suggested('--package Demo.Beta')}' first", terminal)
+        self.assertEqual(before, snapshot(self.destination))
+
+        self.cli("uninstall", "--package", "Demo.Beta")
+        terminal = self.terminal(packages=["Demo.Beta@3.0.0"]).ready()
+        self.assertIn("beta-11", terminal.focused)
+        terminal.press(SPACE, lambda: "[X]" in terminal.focused, "the only 3.0 skill")
         self.assertEqual(0, terminal.finish())
-        self.assertIn("Removed 1 skill", terminal.text)
-        self.assertEqual(set(self.names) - {"beta-10"}, self.installed())
+        self.assertEqual({"demo.beta": {"version": "3.0.0", "skills": ["beta-11"]}}, self.manifest_packages())
+
+    def test_a_version_change_that_would_hand_a_skill_to_another_package_stops(self):
+        self.add_shared_skills()
+        self.cli("install", packages=["Demo.Alpha@1.0.0"])
+        newer = self.cache / "demo.alpha" / "1.1.0" / "skills" / "alpha-01"
+        newer.mkdir(parents=True)
+        (newer / "SKILL.md").write_text("---\ndescription: Alpha 1.1 drops shared-skill.\n---\n", encoding="utf-8")
+        before = snapshot(self.destination)
+        packages = ["Demo.Alpha@1.1.0", "Demo.Beta@2.0.0"]
+        for flags in ([], ["--dry-run"]):
+            with self.subTest(flags=flags):
+                result = self.cli("install", *flags, packages=packages, expected=1)
+                self.assertIn(
+                    "Demo.Alpha 1.1.0 no longer ships the installed skill 'shared-skill', "
+                    "and Demo.Beta 2.0.0 ships a skill with that name", result.stderr)
+                self.assertIn(f"Run '{self.suggested('--package Demo.Alpha')}' first", result.stderr)
+                self.assertEqual("", result.stdout)
+                self.assertEqual(before, snapshot(self.destination))
+
+        self.cli("uninstall", "--package", "Demo.Alpha")
+        self.cli("install", packages=packages)
+        self.assertEqual("demo.beta", self.shared_owner())
+        self.assertEqual({"version": "1.1.0", "skills": ["alpha-01"]}, self.manifest_packages()["demo.alpha"])
+
+    def test_a_package_id_with_letters_outside_ascii_survives_later_commands(self):
+        source = self.cache / "contoso.überlib" / "1.0.0" / "skills" / "uber-usage"
+        source.mkdir(parents=True)
+        (source / "SKILL.md").write_text("---\ndescription: Unicode package id.\n---\n", encoding="utf-8")
+        self.cli("install", packages=["Contoso.Überlib@1.0.0"])
+        self.assertEqual({"contoso.überlib": {"version": "1.0.0", "skills": ["uber-usage"]}}, self.manifest_packages())
+        self.cli("install", packages=["Contoso.Überlib@1.0.0"])
+        self.cli("uninstall", "--package", "Contoso.Überlib", "--dry-run")
+        self.cli("uninstall", "--package", "Contoso.Überlib")
+        self.assertFalse(self.manifest.exists())
+        self.assertTrue((self.destination / "team-owned" / "SKILL.md").exists())
+
+    def test_install_stops_when_packages_resolve_to_more_than_one_version(self):
+        newer = self.cache / "demo.alpha" / "1.1.0" / "skills" / "alpha-01"
+        newer.mkdir(parents=True)
+        (newer / "SKILL.md").write_text("---\ndescription: Alpha 1.1.\n---\n", encoding="utf-8")
+        before = snapshot(self.destination)
+        for flags in ([], ["--dry-run"], ["-i"]):
+            with self.subTest(mode="package", flags=flags):
+                result = self.cli(
+                    "install", *flags, packages=["Demo.Alpha@1.0.0", "Demo.Alpha@1.1.0"], expected=1)
+                self.assertIn("--package names more than one version", result.stderr)
+                self.assertIn("Demo.Alpha (1.0.0, 1.1.0)", result.stderr)
+                self.assertEqual("", result.stdout)
+                self.assertEqual(before, snapshot(self.destination))
+
+        project_file, project_xml, beta_reference, restore = self.prepare_project()
+        self.cli("install")
+        installed = snapshot(self.destination)
+        # In its own folder, so the two restores don't share obj\project.assets.json.
+        other = project_file.parent / "Other" / "Other.csproj"
+        other.parent.mkdir()
+        other.write_text(
+            project_xml.replace(beta_reference, "").replace('Version="1.0.0"', 'Version="1.1.0"'),
+            encoding="utf-8",
+        )
+        self.target.write_text(
+            '<Solution><Project Path="App.csproj" /><Project Path="Other/Other.csproj" /></Solution>',
+            encoding="utf-8",
+        )
+        restore()
+        for flags in ([], ["--dry-run"], ["-i"]):
+            with self.subTest(mode="target", flags=flags):
+                result = self.cli("install", *flags, expected=1)
+                self.assertIn("resolve to more than one version", result.stderr)
+                self.assertIn("Demo.Alpha (1.0.0, 1.1.0)", result.stderr)
+                self.assertIn("Central Package Management", result.stderr)
+                self.assertEqual("", result.stdout)
+                self.assertEqual(installed, snapshot(self.destination))
+        self.assertIn("  alpha-01 (Demo.Alpha 1.1.0)", self.cli("list").stdout)
+        self.assertIn("No stale skills were found.", self.cli("uninstall", "--stale").stdout)
+        self.assertEqual(installed, snapshot(self.destination))
 
     def test_valid_underscore_ids_work_for_coordinate_and_uninstall_filters(self):
         for package in ("_Acme", "Acme_"):
@@ -673,9 +872,8 @@ class PickerRegression(unittest.TestCase):
     def test_interactive_uninstall_matches_the_same_normalized_version_as_noninteractive(self):
         self.cli("install", packages=["Demo.Alpha@1.0.0"])
         before = snapshot(self.destination)
-        preview = json.loads(self.cli(
-            "uninstall", "--package", "demo.alpha@1.0", "--dry-run", "--json").stdout)
-        self.assertEqual(15, len(preview["removed"]))
+        preview = self.cli("uninstall", "--package", "demo.alpha@1.0", "--dry-run").stdout
+        self.assertIn("Would remove 15 skills:", preview)
 
         terminal = self.terminal("uninstall", "--package", "demo.alpha@1.0", "--dry-run").ready()
         self.assertIn("0 of 15 selected", terminal.compact)
@@ -693,11 +891,12 @@ class PickerRegression(unittest.TestCase):
         for verb in ("install", "uninstall"):
             with self.subTest(verb=verb):
                 self.cli("uninstall")
-                self.cli("install", packages=["Demo.Alpha@1.0.0"])
+                if verb == "uninstall":
+                    self.cli("install", packages=["Demo.Alpha@1.0.0"])
                 terminal = self.terminal(verb, packages=["Demo.Alpha@1.0.0"]).ready()
                 terminal.press(END, lambda: "shared-skill" in terminal.focused, "reviewed owner")
                 terminal.press(SPACE)
-                self.cli("uninstall", "--package", "Demo.Alpha")
+                self.cli("uninstall")
                 self.cli("install", packages=["Demo.Beta@2.0.0"])
                 before = snapshot(self.destination)
                 self.assertEqual(1, terminal.finish())
@@ -711,7 +910,7 @@ class PickerRegression(unittest.TestCase):
                 before = snapshot(self.destination)
                 process = None
                 try:
-                    command = self.command(verb, "--json")
+                    command = self.command(verb)
                     if verb == "uninstall":
                         command[command.index("--destination") + 1] = "\\\\?\\" + str(self.destination)
                     with destination_mutex(self.destination):
@@ -724,7 +923,7 @@ class PickerRegression(unittest.TestCase):
                         self.assertEqual(before, snapshot(self.destination))
                     stdout, stderr = process.communicate(timeout=30)
                     self.assertEqual(0, process.returncode, stdout + stderr)
-                    self.assertIsInstance(json.loads(stdout), dict)
+                    self.assertIn("Copied 25 skills:" if verb == "install" else "Removed 25 skills:", stdout)
                 finally:
                     if process is not None and process.poll() is None:
                         process.kill()
@@ -743,7 +942,7 @@ class PickerRegression(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         process = None
         try:
-            command = self.command("install", "--json")
+            command = self.command("install")
             command[command.index("--destination") + 1] = str(alias)
             with destination_mutex(self.destination):
                 process = subprocess.Popen(
@@ -843,10 +1042,11 @@ class PickerRegression(unittest.TestCase):
             directory.mkdir(parents=True)
             (directory / "SKILL.md").write_text(
                 f"---\ndescription: Guidance for {name}.\n---\n", encoding="utf-8")
-        self.cli("install", packages=["Demo.Alpha@1.0.0"])
-        before = snapshot(self.destination)
 
         for verb in ("install", "uninstall"):
+            if verb == "uninstall":
+                self.cli("install", packages=["Demo.Alpha@1.0.0"])
+            before = snapshot(self.destination)
             for no_color in (False, True):
                 with self.subTest(verb=verb, no_color=no_color):
                     terminal = self.terminal(
@@ -894,28 +1094,41 @@ class PickerRegression(unittest.TestCase):
         self.assertEqual({"alpha-01", "alpha-02"}, self.installed())
         self.assertTrue((self.destination / "team-owned" / "SKILL.md").exists())
 
-    def test_reopening_preselects_installed_items_and_marks_removal_with_red_brackets(self):
+    def test_reopening_lists_only_skills_that_are_not_installed(self):
         self.cli("install", packages=["Demo.Alpha@1.0.0"])
-        before = snapshot(self.destination)
         terminal = self.terminal().ready()
-        self.assertIn("[X]", terminal.focused)
-        self.assertNotIn("brightgreen", terminal.colors("alpha-01"))
-        terminal.press(SPACE, lambda: "[ ]" in terminal.focused, "pending removal")
-        brackets = terminal.colors("[ ]")
-        self.assertEqual("brightred", brackets[0])
-        self.assertEqual("brightred", brackets[2])
-        self.assertEqual({"brightblue"}, set(terminal.colors("alpha-01")))
-        terminal.press(SPACE, lambda: "[X]" in terminal.focused, "keep installed")
-        self.assertNotIn("brightred", terminal.colors("alpha-01"))
+        self.assertIn("Installed skills aren't listed.", terminal.compact)
+        self.assertIn("0 of 10 selected", terminal.compact)
+        self.assertIn("beta-01", terminal.focused)
+        self.assertIn("[ ]", terminal.focused)
+        self.assertNotIn("alpha-", terminal.text)
+        terminal.press(SPACE, lambda: "[X]" in terminal.focused, "pending installation")
+        terminal.press(SPACE, lambda: "[ ]" in terminal.focused, "undo")
+        self.assertNotIn("brightred", terminal.colors("[ ]"))
+        terminal.press(SPACE, lambda: "[X]" in terminal.focused, "install beta-01")
+        self.assertNotIn("brightred", terminal.colors("[X]"))
         self.assertEqual(0, terminal.finish())
+        self.assertEqual({f"alpha-{n:02}" for n in range(1, 16)} | {"beta-01"}, self.installed())
+
+        self.cli("install")
+        before = snapshot(self.destination)
+        terminal = self.terminal()
+        self.assertEqual(0, terminal.exit_status())
+        self.assertNotIn("Which skills should", terminal.text)
+        self.assert_shown("Nothing new to install. Every skill that these packages ship is already installed.", terminal)
         self.assertEqual(before, snapshot(self.destination))
 
-    def test_package_filtered_install_cannot_remove_hidden_installed_skills(self):
-        self.cli("install")
+    def test_package_install_never_removes_skills_of_packages_it_does_not_name(self):
+        self.cli("install", packages=["Demo.Beta@2.0.0"])
+        beta = {f"beta-{number:02}" for number in range(1, 11)}
         terminal = self.terminal(packages=["Demo.Alpha@1.0.0"]).ready()
-        terminal.press(SPACE, lambda: "[ ]" in terminal.focused, "deselect filtered skill")
+        terminal.press(SPACE, lambda: "[X]" in terminal.focused, "select one Alpha skill")
         self.assertEqual(0, terminal.finish())
-        self.assertEqual(set(self.names) - {"alpha-01"}, self.installed())
+        self.assertEqual(beta | {"alpha-01"}, self.installed())
+        result = self.cli("install", packages=["Demo.Alpha@1.0.0"]).stdout
+        self.assertEqual(set(self.names), self.installed())
+        self.assertNotIn("Removed", result)
+        self.assertNotIn("uninstall --stale", result)
 
     def test_uninstall_reads_installed_descriptions_without_the_package_cache(self):
         self.cli("install", packages=["Demo.Beta@2.0.0"])
@@ -1137,15 +1350,18 @@ class PickerRegression(unittest.TestCase):
         self.assertEqual(set(), self.installed())
 
     def test_cancel_keys_preserve_files_and_restore_the_cursor(self):
-        self.cli("install")
-        before = snapshot(self.destination)
-        for key in (ESC, "q", CTRL_C):
-            terminal = self.terminal().ready()
-            terminal.press("c", lambda: "0 of 25" in terminal.compact, "pending removal of all")
-            self.assertEqual(0, terminal.finish(key))
-            self.assertEqual(before, snapshot(self.destination))
-            self.assertFalse(terminal.screen.cursor.hidden)
-            self.assertNotIn(terminal.screen.cursor.attrs.fg, {"brightred", "brightgreen", "brightblue"})
+        for verb, pending in (("install", "25 of 25"), ("uninstall", "25 to remove")):
+            if verb == "uninstall":
+                self.cli("install")
+            before = snapshot(self.destination)
+            for key in (ESC, "q", CTRL_C):
+                with self.subTest(verb=verb, key=repr(key)):
+                    terminal = self.terminal(verb).ready()
+                    terminal.press("a", lambda: pending in terminal.compact, f"pending {verb} of all")
+                    self.assertEqual(0, terminal.finish(key))
+                    self.assertEqual(before, snapshot(self.destination))
+                    self.assertFalse(terminal.screen.cursor.hidden)
+                    self.assertNotIn(terminal.screen.cursor.attrs.fg, {"brightred", "brightgreen", "brightblue"})
 
     def test_interactive_dry_runs_change_no_files(self):
         before = snapshot(self.destination)
@@ -1165,15 +1381,16 @@ class PickerRegression(unittest.TestCase):
         self.manifest.write_text("<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> branch", encoding="utf-8")
         before = snapshot(self.destination)
         for verb in ("install", "uninstall"):
-            for flags in ([], ["--json"], ["--dry-run"], ["-i"]):
+            for flags in ([], ["--dry-run"], ["-i"]):
                 result = self.cli(verb, *flags, expected=1)
                 self.assertEqual("", result.stdout)
                 self.assertIn("Could not read the install manifest", result.stderr)
                 self.assertEqual(before, snapshot(self.destination))
-        self.cli("list", "--json")
+        self.cli("list")
         self.assertEqual(before, snapshot(self.destination))
 
     def test_manifest_metadata_cannot_inject_terminal_controls_into_human_reports(self):
+        self.add_shared_skills()
         self.cli("install")
         original = self.manifest.read_text(encoding="utf-8")
         controls = (
@@ -1183,28 +1400,21 @@ class PickerRegression(unittest.TestCase):
         )
         for control in controls:
             damaged = json.loads(original)
-            owner = damaged["installed"][0]
-            owner["package"] += control
-            owner["version"] += control
+            damaged["packages"]["demo.alpha"]["version"] += control
             self.manifest.write_text(json.dumps(damaged), encoding="utf-8")
             before = snapshot(self.destination)
-            for verb in ("uninstall", "install"):
+            for verb, packages, expected in (
+                ("uninstall", None, "alpha-01 (demo.alpha 1.0.0"),
+                ("install", ["Demo.Beta@2.0.0"], "managed for demo.alpha 1.0.0"),
+            ):
                 with self.subTest(verb=verb, control=ascii(control)):
-                    result = self.cli(verb, "--dry-run")
+                    result = self.cli(verb, "--dry-run", packages=packages)
                     self.assert_plain_output(result.stdout)
-                    self.assertIn("Demo.Alpha", result.stdout)
-                    self.assertEqual(before, snapshot(self.destination))
-                    report = json.loads(self.cli(verb, "--dry-run", "--json").stdout)
-                    if verb == "uninstall":
-                        identity = next(skill for skill in report["removed"] if skill["skillName"] == "alpha-01")
-                        self.assertEqual(owner["package"], identity["packageId"])
-                        self.assertEqual(owner["version"], identity["packageVersion"])
-                    else:
-                        self.assertTrue(any(owner["package"] in skill["reason"] for skill in report["skipped"]))
+                    self.assertIn(expected, result.stdout)
                     self.assertEqual(before, snapshot(self.destination))
         result = self.cli("uninstall")
         self.assert_plain_output(result.stdout)
-        self.assertIn("Removed 25 skills", result.stdout)
+        self.assertIn("Removed 26 skills", result.stdout)
         self.assertTrue((self.destination / "team-owned" / "SKILL.md").is_file())
 
     def test_operational_errors_cannot_emit_terminal_controls(self):
@@ -1255,14 +1465,21 @@ class PickerRegression(unittest.TestCase):
             "Captured output contains unsafe terminal controls.",
         )
 
-    def test_redirected_interactive_and_json_combinations_remain_rejected(self):
+    def test_redirected_interactive_runs_and_json_output_are_rejected(self):
         for verb in ("install", "uninstall"):
             if verb == "uninstall":
                 self.cli("install")
             result = self.cli(verb, "-i", expected=1)
             self.assertIn("needs a terminal", result.stderr)
-            result = self.cli(verb, "-i", "--json", expected=1)
-            self.assertIn("cannot be combined", result.stderr)
+        before = snapshot(self.destination)
+        for verb, flags in (
+            ("install", ["--json"]), ("install", ["-i", "--json"]), ("list", ["--json"]),
+            ("uninstall", ["--json"]), ("uninstall", ["-i", "--json"]),
+        ):
+            with self.subTest(verb=verb, flags=flags):
+                result = self.cli(verb, *flags, expected=1)
+                self.assertIn("Unrecognized command or argument '--json'", result.stdout + result.stderr)
+                self.assertEqual(before, snapshot(self.destination))
 
     def test_empty_uninstall_does_not_prompt(self):
         before = snapshot(self.destination)

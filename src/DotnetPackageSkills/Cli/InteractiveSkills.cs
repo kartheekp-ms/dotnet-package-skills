@@ -8,46 +8,24 @@ internal sealed record UninstallChoice(
 
 internal static class InteractiveSkills
 {
+    /// <summary>
+    /// Checklist items for install, which only adds. Installed skills are never offered, so
+    /// nothing on the list can refresh, replace or remove a skill the user already has.
+    /// </summary>
     public static IReadOnlyList<SkillPickerItem> ForInstall(
-        IReadOnlyList<BundledSkill> skills,
-        IReadOnlyList<TrackedSkill> installed,
-        string destination,
-        bool includeRetained = false)
+        IReadOnlyList<BundledSkill> candidates,
+        IReadOnlyCollection<TrackedSkill> installed)
     {
-        var items = new List<SkillPickerItem>();
-        foreach (var skill in skills)
-        {
-            var owner = installed.FirstOrDefault(entry =>
-                entry.Skill.Equals(skill.RelativePath, StringComparison.OrdinalIgnoreCase));
-            if (owner is not null && !SkillInstaller.HasSameOwner(owner, skill))
-            {
-                continue;
-            }
+        var tracked = installed.Select(entry => entry.Skill).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            items.Add(Describe(
-                skill.RelativePath,
-                skill.PackageId,
-                skill.PackageVersion,
-                owner is not null,
-                skill.SourcePath));
-        }
-
-        if (includeRetained)
-        {
-            var available = items.Select(item => item.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var entry in installed.Where(entry => !available.Contains(entry.Skill)))
-            {
-                items.Add(Describe(
-                    entry.Skill, entry.Package, entry.Version, installed: true,
-                    Path.Combine(destination, entry.Skill)) with
-                {
-                    Retained = true,
-                });
-            }
-        }
-
-        return [.. items.OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(item => item.Name, StringComparer.Ordinal)];
+        return
+        [
+            .. candidates
+                .Where(skill => !tracked.Contains(skill.RelativePath))
+                .Select(skill => Describe(skill.RelativePath, skill.PackageId, skill.PackageVersion, skill.SourcePath))
+                .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(item => item.Name, StringComparer.Ordinal),
+        ];
     }
 
     public static IReadOnlyList<SkillPickerItem> ForUninstall(
@@ -58,36 +36,30 @@ internal static class InteractiveSkills
                 skill.Skill,
                 skill.Package,
                 skill.Version,
-                installed: true,
                 Path.Combine(destination, skill.Skill))),
         ];
 
+    /// <summary>The checked skills that were actually shown. Nothing else is installed or changed.</summary>
     public static SkillChoice InstallChoice(
-        IReadOnlyList<BundledSkill> skills,
-        IReadOnlyList<TrackedSkill> installed,
+        IReadOnlyList<BundledSkill> candidates,
+        IReadOnlyCollection<TrackedSkill> installed,
         IReadOnlyList<SkillPickerItem> shown,
-        IReadOnlySet<string> selected)
-    {
-        return new SkillChoice(
-            [.. skills.Where(skill => selected.Contains(skill.RelativePath) &&
-                shown.Any(item => !item.Retained &&
+        IReadOnlySet<string> selected) =>
+        new(
+        [
+            .. candidates.Where(skill => selected.Contains(skill.RelativePath) &&
+                shown.Any(item =>
                     item.Name.Equals(skill.RelativePath, StringComparison.OrdinalIgnoreCase) &&
-                    item.Package.Equals(skill.PackageId, StringComparison.OrdinalIgnoreCase)))],
-            [.. installed.Where(entry => !selected.Contains(entry.Skill) &&
-                shown.Any(item => item.Installed &&
-                    item.Name.Equals(entry.Skill, StringComparison.OrdinalIgnoreCase) &&
-                    item.Package.Equals(entry.Package, StringComparison.OrdinalIgnoreCase)))
-                .Select(entry => entry.Skill)])
+                    item.Package.Equals(skill.PackageId, StringComparison.OrdinalIgnoreCase))),
+        ])
         {
             ExpectedInstalled = installed,
         };
-    }
 
     private static SkillPickerItem Describe(
         string name,
         string package,
         string version,
-        bool installed,
         string skillDirectory)
     {
         var metadata = SkillDescriptionReader.Read(skillDirectory);
@@ -95,7 +67,6 @@ internal static class InteractiveSkills
             name,
             package,
             version,
-            installed,
             metadata.Description,
             metadata.Warning);
     }

@@ -64,18 +64,60 @@ public class OutputWriterTests
     }
 
     [Fact]
-    public void Json_output_includes_structured_skipped_collisions()
+    public void Skills_whose_package_left_the_target_are_listed_with_the_command_that_removes_them()
     {
         using var output = new StringWriter();
+        var result = ResultWithCollision() with
+        {
+            Unreferenced = [new TrackedSkill("contoso.widgets", "2.3.0", "contoso.widgets-usage")],
+        };
 
-        // Through JsonReport, because that is what the command does. Handing the writer a
-        // domain record would test a path production no longer takes.
-        new OutputWriter(output).WriteJson(JsonReport.For(ResultWithCollision()));
+        new OutputWriter(output).WriteInstallReport(result, copied: true);
 
-        var json = output.ToString();
-        Assert.Contains("\"skipped\"", json);
-        Assert.Contains("\"packageId\": \"Beta.Widgets\"", json);
-        Assert.Contains("\"relativePath\": \"shared-skill\"", json);
+        Assert.Contains(
+            "1 installed skill belongs to a package that the target no longer references:" + Environment.NewLine +
+            "  contoso.widgets-usage (contoso.widgets 2.3.0)" + Environment.NewLine +
+            "Run 'dotnet package-skills uninstall --stale' to remove it.",
+            output.ToString());
+    }
+
+    [Theory]
+    [InlineData("other.package", "packages")]
+    [InlineData("contoso.widgets", "a package")]
+    public void The_stale_hint_counts_skills_and_packages_separately(string secondPackage, string packages)
+    {
+        using var output = new StringWriter();
+        var result = ResultWithCollision() with
+        {
+            Unreferenced =
+            [
+                new TrackedSkill("contoso.widgets", "2.3.0", "contoso.widgets-usage"),
+                new TrackedSkill(secondPackage, "2.3.0", "second-skill"),
+            ],
+        };
+
+        new OutputWriter(output).WriteInstallReport(result, copied: true);
+
+        Assert.Contains($"2 installed skills belong to {packages} that the target no longer references:", output.ToString());
+        Assert.Contains("Run 'dotnet package-skills uninstall --stale' to remove them.", output.ToString());
+    }
+
+    [Fact]
+    public void The_stale_hint_prints_the_command_for_the_destination_and_target_that_were_used()
+    {
+        using var output = new StringWriter();
+        var result = ResultWithCollision() with
+        {
+            Unreferenced = [new TrackedSkill("contoso.widgets", "2.3.0", "contoso.widgets-usage")],
+            StaleCommand = "dotnet package-skills uninstall --stale --destination \"my\u001b[2Jskills\"",
+        };
+
+        new OutputWriter(output).WriteInstallReport(result, copied: true);
+
+        Assert.Contains(
+            "Run 'dotnet package-skills uninstall --stale --destination \"myskills\"' to remove it.",
+            output.ToString());
+        Assert.DoesNotContain('\u001b', output.ToString());
     }
 
     [Fact]
@@ -99,7 +141,33 @@ public class OutputWriterTests
 
         new OutputWriter(output).WriteInstallReport(result, copied: true);
 
-        Assert.Contains("None of the scanned packages ship a skills/ folder", output.ToString());
+        // A package missing from the cache is indistinguishable from one without skills, so the
+        // report claims nothing about why nothing was found.
+        Assert.Contains($"{Environment.NewLine}No bundled skills found.{Environment.NewLine}", output.ToString());
+        Assert.DoesNotContain("ship a skills/ folder", output.ToString());
+        Assert.DoesNotContain("not extracted", output.ToString());
+    }
+
+    [Theory]
+    [InlineData(false, "Nothing new to install. Every skill that these packages ship is already installed.")]
+    [InlineData(true, "Nothing new to install.")]
+    public void An_interactive_install_with_nothing_to_offer_says_so(bool skipped, string expected)
+    {
+        using var output = new StringWriter();
+        var result = ResultWithCollision() with
+        {
+            Skills = [],
+            SkillsDiscovered = 1,
+            NothingNewToInstall = true,
+            Skipped = skipped ? ResultWithCollision().Skipped : [],
+        };
+
+        new OutputWriter(output).WriteInstallReport(result, copied: true);
+
+        var lines = output.ToString().Split(Environment.NewLine);
+        Assert.Contains(expected, lines);
+        Assert.DoesNotContain("Copied no skills.", lines);
+        Assert.Equal(skipped, output.ToString().Contains("Warning: skipped 1 colliding skill:", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -126,27 +194,6 @@ public class OutputWriterTests
         Assert.Contains("Would copy 1 skill:", output.ToString());
     }
 
-    [Fact]
-    public void Packages_that_were_never_extracted_are_not_said_to_ship_no_skills()
-    {
-        using var output = new StringWriter();
-        var result = ResultWithCollision() with
-        {
-            Skills = [],
-            Skipped = [],
-            SkillsDiscovered = 0,
-            NotOnDisk = ["Ghost.Package 9.9.9"],
-        };
-
-        new OutputWriter(output).WriteInstallReport(result, copied: true);
-
-        var report = output.ToString();
-        Assert.Contains("No bundled skills found.", report);
-        // We could not look inside the package, so claiming it ships nothing would be a guess.
-        Assert.DoesNotContain("ship a skills/ folder", report);
-        Assert.Contains("not extracted in the NuGet cache", report);
-    }
-
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
@@ -158,7 +205,7 @@ public class OutputWriterTests
         {
             DryRun = dryRun,
             Removed = [new TrackedSkill("Old.Package", "1.0.0", "old-skill")],
-            NotOnDisk = ["Ghost.Package 9.9.9"],
+            Unreferenced = [new TrackedSkill("left.package", "3.0.0", "left-skill")],
         };
         var untrusted = clean with
         {
@@ -180,6 +227,11 @@ public class OutputWriterTests
                 .. clean.Removed.Select(skill => new TrackedSkill(
                     WithControls(skill.Package), WithControls(skill.Version), WithControls(skill.Skill))),
             ],
+            Unreferenced =
+            [
+                .. clean.Unreferenced.Select(skill => new TrackedSkill(
+                    WithControls(skill.Package), WithControls(skill.Version), WithControls(skill.Skill))),
+            ],
             Skipped =
             [
                 .. clean.Skipped.Select(skill => skill with
@@ -191,7 +243,6 @@ public class OutputWriterTests
                     Reason = WithControls(skill.Reason),
                 }),
             ],
-            NotOnDisk = [.. clean.NotOnDisk.Select(WithControls)],
         };
         using var expected = new StringWriter();
         using var actual = new StringWriter();
@@ -236,6 +287,40 @@ public class OutputWriterTests
         }
     }
 
+    [Theory]
+    [InlineData(false, "Removed 1 skill:")]
+    [InlineData(true, "Would remove 1 skill:")]
+    public void A_stale_uninstall_report_names_the_target_it_compared_against(bool dryRun, string heading)
+    {
+        using var output = new StringWriter();
+
+        new OutputWriter(output).WriteUninstallReport(
+            [new TrackedSkill("contoso.widgets", "2.3.0", "widget-usage")], @"C:\repo\.agents\skills", dryRun,
+            target: @"C:\repo\App.sln");
+
+        Assert.Equal(
+            [
+                @"Target:      C:\repo\App.sln",
+                @"Destination: C:\repo\.agents\skills",
+                string.Empty,
+                heading,
+                "  widget-usage (contoso.widgets 2.3.0)",
+                string.Empty,
+            ],
+            output.ToString().Split(Environment.NewLine));
+    }
+
+    [Fact]
+    public void A_stale_uninstall_with_nothing_stale_says_so()
+    {
+        using var output = new StringWriter();
+
+        new OutputWriter(output).WriteUninstallReport([], @"C:\repo\.agents\skills", dryRun: false, target: @"C:\repo\App.sln");
+
+        Assert.Contains("Nothing to remove. No stale skills were found.", output.ToString());
+        Assert.DoesNotContain("No skills installed by this tool", output.ToString());
+    }
+
     [Fact]
     public void An_unterminated_control_in_one_identity_field_cannot_hide_the_following_fields()
     {
@@ -256,27 +341,25 @@ public class OutputWriterTests
         var destination = temp.CreateDirectory("dest");
         var skillFile = temp.CreateFile("dest/example-skill/SKILL.md", "installed guidance");
         var handwritten = temp.CreateFile("dest/our-own-skill/SKILL.md", "handwritten guidance");
-        var package = "Example" + ClipboardControl;
+        // Package ids are validated when the manifest is read, so the version carries the payload.
         var version = "1.0.0" + ClipboardControl;
         var manifest = temp.CreateFile("dest/.dotnet-package-skills.json", JsonSerializer.Serialize(new
         {
-            installed = new[] { new { package, version, skills = new[] { "example-skill" } } },
+            version = 1,
+            packages = new Dictionary<string, object>
+            {
+                ["example"] = new { version, skills = new[] { "example-skill" } },
+            },
         }));
         var before = File.ReadAllBytes(manifest);
         var removed = new SkillInstaller().Uninstall(destination, null, null, dryRun: true);
         using var text = new StringWriter();
-        using var json = new StringWriter();
 
         new OutputWriter(text).WriteUninstallReport(removed, destination, dryRun: true);
-        new OutputWriter(json).WriteJson(JsonReport.ForUninstall(removed, destination, dryRun: true));
 
         AssertPlainText(text.ToString());
-        Assert.Contains("example-skill (Example 1.0.0)", text.ToString());
-        using var document = JsonDocument.Parse(json.ToString());
-        var identity = document.RootElement.GetProperty("removed")[0];
-        Assert.Equal(package, identity.GetProperty("packageId").GetString());
-        Assert.Equal(version, identity.GetProperty("packageVersion").GetString());
-        Assert.Equal(package, Assert.Single(removed).Package);
+        Assert.Contains("example-skill (example 1.0.0)", text.ToString());
+        Assert.Equal("example", Assert.Single(removed).Package);
         Assert.Equal(version, Assert.Single(removed).Version);
         Assert.Equal(before, File.ReadAllBytes(manifest));
         Assert.Equal("installed guidance", File.ReadAllText(skillFile));

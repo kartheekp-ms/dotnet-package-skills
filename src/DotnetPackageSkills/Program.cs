@@ -16,7 +16,7 @@ namespace DotnetPackageSkills.Cli
         /// Vendor-neutral default. Agents that follow another convention are one
         /// --destination away, which is why this is a default rather than a hard-coded path.
         /// </summary>
-        private const string DefaultDestination = ".agents/skills";
+        private const string DefaultDestination = InstallRequest.DefaultDestination;
 
         public static int Invoke(string[] args, TextWriter? output = null, TextWriter? error = null) =>
             CommandLineDiagnostics.Invoke(Build().Parse(args), output ?? Console.Out, error ?? Console.Error);
@@ -38,6 +38,16 @@ namespace DotnetPackageSkills.Cli
                 Arity = ArgumentArity.OneOrMore,
                 AllowMultipleArgumentsPerToken = true,
             };
+            package.Validators.Add(result =>
+            {
+                // Taking several values means the parser hands --package any unknown option that
+                // follows it, such as a --json left in an old script. No package ID starts with
+                // '-', so report it the way the parser reports an unknown option anywhere else.
+                foreach (var token in result.Tokens.Where(token => token.Value.StartsWith('-')))
+                {
+                    result.AddError($"Unrecognized command or argument '{token.Value}'.");
+                }
+            });
 
             var destination = new Option<string>("--destination", "-d")
             {
@@ -62,23 +72,18 @@ namespace DotnetPackageSkills.Cli
                 Description = "Report what would change without writing anything.",
             };
 
-            var json = new Option<bool>("--json")
-            {
-                Description = "Emit machine-readable JSON instead of the human-readable report.",
-            };
-
             var interactive = new Option<bool>("--interactive", "-i")
             {
                 Description =
-                    "Choose which skills to install or keep, with descriptions, one page at a time. " +
-                    "Installed skills start selected; only turning one off removes it.",
+                    "Choose which skills to add, with descriptions, one page at a time. " +
+                    "Only skills that aren't installed are listed; installed skills are left as they are.",
             };
 
             var uninstallPackage = new Option<string?>("--package", "-p")
             {
                 Description =
-                    "Remove only skills from this package. Accepts Id to remove every version, " +
-                    "or Id@Version to remove one.",
+                    "Remove only this package's skills. Accepts Id, or Id@Version to remove them " +
+                    "only if that version is the one installed.",
                 HelpName = "ID[@VERSION]",
                 Arity = ArgumentArity.ExactlyOne,
             };
@@ -115,10 +120,9 @@ namespace DotnetPackageSkills.Cli
 
             var install = new Command("install", "Copy skills bundled in NuGet packages into the repository.")
             {
-                target, package, destination, noRestore, globalPackages, dryRun, json, interactive,
+                target, package, destination, noRestore, globalPackages, dryRun, interactive,
             };
             install.Validators.Add(RejectTargetWithPackage);
-            install.Validators.Add(RejectInteractiveWithJson);
             install.SetAction(parseResult => Run(() =>
             {
                 var request = BuildRequest(parseResult);
@@ -134,25 +138,19 @@ namespace DotnetPackageSkills.Cli
                     return;
                 }
 
-                Report(
-                    parseResult,
-                    writer => writer.WriteInstallReport(result, copied: true),
-                    JsonReport.For(result));
+                new OutputWriter(Console.Out).WriteInstallReport(result, copied: true);
             }));
 
             var list = new Command("list", "Show which packages ship skills, without copying anything.")
             {
-                target, package, destination, noRestore, globalPackages, json,
+                target, package, destination, noRestore, globalPackages,
             };
             list.Validators.Add(RejectTargetWithPackage);
             list.SetAction(parseResult => Run(() =>
             {
                 var request = BuildRequest(parseResult) with { DryRun = true };
                 var result = new SkillInstallService(new ProcessRunner()).Discover(request);
-                Report(
-                    parseResult,
-                    writer => writer.WriteInstallReport(result, copied: false),
-                    JsonReport.For(result));
+                new OutputWriter(Console.Out).WriteInstallReport(result, copied: false);
             }));
 
             var uninstallInteractive = new Option<bool>("--interactive", "-i")
@@ -162,17 +160,46 @@ namespace DotnetPackageSkills.Cli
                     "Only skills this tool installed are listed.",
             };
 
+            var stale = new Option<bool>("--stale")
+            {
+                Description =
+                    "Remove only stale skills: skills whose package the target no longer references, " +
+                    "or references at a different version. Reads the target's package references, " +
+                    "so it needs a solution or project.",
+            };
+
+            var staleTarget = new Option<string?>("--target", "-t")
+            {
+                Description =
+                    "With --stale, the solution or project to compare against. " +
+                    "Defaults to searching the current directory.",
+                HelpName = "PATH",
+            };
+
+            var staleNoRestore = new Option<bool>("--no-restore")
+            {
+                Description = "With --stale, fail instead of restoring when the target has not been restored yet.",
+            };
+
             var uninstall = new Command("uninstall", "Remove skills this tool previously copied in.")
             {
-                uninstallDestination, uninstallPackage, dryRun, json, uninstallInteractive,
+                uninstallDestination, uninstallPackage, stale, staleTarget, staleNoRestore, dryRun, uninstallInteractive,
             };
             uninstall.Validators.Add(result =>
             {
-                if (result.GetResult(uninstallInteractive) is not null && result.GetResult(json) is not null)
+                var isStale = result.GetResult(stale) is not null;
+
+                if (isStale && result.GetResult(uninstallPackage) is not null)
                 {
                     result.AddError(
-                        "--interactive and --json cannot be combined. JSON output is for scripts, " +
-                        "and a script has nobody to answer the prompt.");
+                        "--stale and --package cannot be combined. --stale removes the skills that no longer " +
+                        "match the target; --package removes one package's skills.");
+                }
+
+                if (!isStale && (result.GetResult(staleTarget) is not null || result.GetResult(staleNoRestore) is not null))
+                {
+                    result.AddError(
+                        "--target and --no-restore can be used with uninstall only together with --stale.");
                 }
             });
             uninstall.SetAction(parseResult => Run(() =>
@@ -182,12 +209,17 @@ namespace DotnetPackageSkills.Cli
                 var isDryRun = parseResult.GetValue(dryRun);
                 var (id, version) = ParseUninstallFilter(parseResult.GetValue(uninstallPackage));
                 var root = Path.GetFullPath(destinationValue, workingDirectory);
+                var service = new SkillInstallService(new ProcessRunner());
+                var references = parseResult.GetValue(stale)
+                    ? service.ReadReferences(
+                        parseResult.GetValue(staleTarget), workingDirectory, !parseResult.GetValue(staleNoRestore))
+                    : null;
 
                 UninstallChoice? choice = null;
 
                 if (parseResult.GetValue(uninstallInteractive))
                 {
-                    choice = ChooseWhatToRemove(destinationValue, workingDirectory, id, version);
+                    choice = ChooseWhatToRemove(destinationValue, workingDirectory, id, version, references);
 
                     if (choice is null)
                     {
@@ -196,14 +228,10 @@ namespace DotnetPackageSkills.Cli
                     }
                 }
 
-                var removed = new SkillInstallService(new ProcessRunner())
-                    .Uninstall(destinationValue, workingDirectory, id, version, isDryRun,
-                        choice?.Selected, choice?.ExpectedInstalled);
+                var removed = service.Uninstall(destinationValue, workingDirectory, id, version, isDryRun,
+                    choice?.Selected, choice?.ExpectedInstalled, references?.Packages);
 
-                Report(
-                    parseResult,
-                    writer => writer.WriteUninstallReport(removed, root, isDryRun),
-                    JsonReport.ForUninstall(removed, root, isDryRun));
+                new OutputWriter(Console.Out).WriteUninstallReport(removed, root, isDryRun, references?.Target);
             }));
 
             return new RootCommand(
@@ -237,53 +265,36 @@ namespace DotnetPackageSkills.Cli
                         "from a project, or --package to name exact packages yourself.");
                 }
             }
-
-            void RejectInteractiveWithJson(System.CommandLine.Parsing.CommandResult result)
-            {
-                if (result.GetResult(interactive) is not null && result.GetResult(json) is not null)
-                {
-                    result.AddError(
-                        "--interactive and --json cannot be combined. JSON output is for scripts, " +
-                        "and a script has nobody to answer the prompt.");
-                }
-            }
-
-            void Report(ParseResult parseResult, Action<OutputWriter> writeReport, object jsonPayload)
-            {
-                var writer = new OutputWriter(Console.Out);
-
-                if (parseResult.GetValue(json))
-                {
-                    writer.WriteJson(jsonPayload);
-                }
-                else
-                {
-                    writeReport(writer);
-                }
-            }
         }
 
         /// <summary>
-        /// Discovers skills, lets the user pick from them a page at a time, then installs the
-        /// selection. Returns null when the user cancelled.
+        /// Discovers skills, lets the user pick from the ones not installed yet a page at a time,
+        /// then copies the picks. Returns null when the user cancelled.
         /// </summary>
+        /// <remarks>
+        /// Every check that could stop the install runs before the checklist opens, so a choice is
+        /// never made only to be refused. With nothing new to offer there is no checklist at all.
+        /// </remarks>
         private static InstallResult? InstallInteractively(SkillInstallService service, InstallRequest request)
         {
             var discovered = service.Discover(request);
             var installed = SkillInstallService.InstalledSkills(discovered.Destination, request.WorkingDirectory);
             var prepared = service.PrepareInteractiveInstall(request, discovered, installed);
-            var items = InteractiveSkills.ForInstall(
-                prepared.Skills, installed, prepared.Destination, includeRetained: request.Packages.Count == 0);
+            var items = InteractiveSkills.ForInstall(prepared.Skills, installed);
 
-            var picked = new SkillPicker(new SystemTerminal()).Choose(items, PickerTitle(discovered));
+            if (items.Count == 0)
+            {
+                return prepared with { NothingNewToInstall = prepared.SkillsDiscovered > 0 };
+            }
+
+            var picked = new SkillPicker(new SystemTerminal())
+                .Choose(items, PickerTitle(discovered), PickerMode.Install, InstalledSkillsNote);
 
             if (picked is null)
             {
                 return null;
             }
 
-            // A tick keeps the skill. Anything already installed that is no longer ticked is a
-            // deliberate removal, which is not the same as a skill simply going unmentioned.
             var choice = InteractiveSkills.InstallChoice(prepared.Skills, installed, items, picked);
 
             return service.Install(request, prepared, choice);
@@ -302,11 +313,13 @@ namespace DotnetPackageSkills.Cli
             string destination,
             string workingDirectory,
             string? packageId,
-            string? packageVersion)
+            string? packageVersion,
+            TargetReferences? references)
         {
             var installed = SkillInstallService.InstalledSkills(destination, workingDirectory);
             var matching = installed
                 .Where(entry => SkillInstaller.Matches(entry, packageId, packageVersion))
+                .Where(entry => references is null || SkillInstaller.IsStale(entry, references.Packages))
                 .ToList();
 
             if (matching.Count == 0)
@@ -318,10 +331,19 @@ namespace DotnetPackageSkills.Cli
                 matching,
                 Path.GetFullPath(destination, workingDirectory));
 
-            var selected = new SkillPicker(new SystemTerminal())
-                .Choose(items, "Which skills should be uninstalled?", PickerMode.Uninstall);
+            var selected = new SkillPicker(new SystemTerminal()).Choose(
+                items,
+                "Which skills should be uninstalled?",
+                PickerMode.Uninstall,
+                references is null ? null : StaleSkillsNote);
             return selected is null ? null : new UninstallChoice(selected.ToList(), installed);
         }
+
+        /// <summary>Shown under the install checklist title, because the list is not everything.</summary>
+        internal const string InstalledSkillsNote = "Installed skills aren't listed.";
+
+        /// <summary>Shown under the uninstall checklist title with <c>--stale</c>.</summary>
+        internal const string StaleSkillsNote = "Only skills that don't match the target are listed.";
 
         private static string PickerTitle(InstallResult discovered) =>
             discovered.Target is null
@@ -330,7 +352,7 @@ namespace DotnetPackageSkills.Cli
 
         /// <summary>
         /// Splits the uninstall filter, which unlike --package on install may omit the version
-        /// to mean "every version of this package".
+        /// to mean "whichever version of this package is installed".
         /// </summary>
         internal static (string? Id, string? Version) ParseUninstallFilter(string? value)
         {

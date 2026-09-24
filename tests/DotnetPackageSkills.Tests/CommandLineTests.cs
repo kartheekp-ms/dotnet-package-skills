@@ -78,11 +78,91 @@ public class CommandLineTests
     }
 
     [Fact]
-    public void Uninstall_rejects_interactive_combined_with_json()
+    public void Uninstall_stale_accepts_a_target_and_every_other_uninstall_option_but_a_package()
     {
-        var result = CommandLineBuilder.Build().Parse(["uninstall", "--interactive", "--json"]);
+        Assert.Empty(CommandLineBuilder.Build().Parse(
+            ["uninstall", "--stale", "--target", "App.sln", "--no-restore", "--dry-run", "-i", "-d", ".claude/skills"])
+            .Errors);
+        Assert.Empty(CommandLineBuilder.Build().Parse(["uninstall", "--stale", "-t", "src"]).Errors);
+        Assert.Empty(CommandLineBuilder.Build().Parse(["uninstall", "--stale"]).Errors);
+    }
 
-        Assert.Contains(result.Errors, error => error.Message.Contains("--interactive and --json"));
+    [Fact]
+    public void Uninstall_stale_cannot_be_combined_with_a_package_filter()
+    {
+        var result = CommandLineBuilder.Build().Parse(["uninstall", "--stale", "--package", "Mockly"]);
+
+        Assert.Contains(result.Errors, error => error.Message.Contains("--stale and --package cannot be combined"));
+    }
+
+    [Theory]
+    [InlineData("--target", "App.sln")]
+    [InlineData("-t", "App.sln")]
+    [InlineData("--no-restore", null)]
+    public void Uninstall_target_and_no_restore_need_stale(string option, string? value)
+    {
+        string[] args = value is null ? ["uninstall", option] : ["uninstall", option, value];
+
+        var result = CommandLineBuilder.Build().Parse(args);
+
+        Assert.Contains(result.Errors, error =>
+            error.Message.Contains("can be used with uninstall only together with --stale", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("install")]
+    [InlineData("list")]
+    public void Only_uninstall_has_the_stale_option(string command)
+    {
+        Assert.NotEmpty(CommandLineBuilder.Build().Parse([command, "--stale"]).Errors);
+    }
+
+    [Fact]
+    public void The_interactive_install_help_says_installed_skills_are_not_listed()
+    {
+        var install = CommandLineBuilder.Build().Subcommands.Single(command => command.Name == "install");
+
+        var interactive = install.Options.Single(option => option.Name == "--interactive");
+
+        Assert.Contains("aren't installed", interactive.Description);
+        Assert.DoesNotContain("remove", interactive.Description, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("install")]
+    [InlineData("list")]
+    [InlineData("uninstall")]
+    public void No_command_offers_json_output(string command)
+    {
+        // Reports are for people. The manifest is the only machine-readable output.
+        Assert.DoesNotContain(
+            CommandLineBuilder.Build().Subcommands.Single(candidate => candidate.Name == command).Options,
+            option => option.Name == "--json");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = CommandLineBuilder.Invoke([command, "--json"], output, error);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Unrecognized command or argument '--json'", error.ToString());
+    }
+
+    [Theory]
+    [InlineData("install")]
+    [InlineData("list")]
+    public void An_unknown_option_after_package_values_is_reported_as_unrecognized(string command)
+    {
+        // --package takes several values, so the parser hands it a trailing unknown option, such
+        // as a --json left in an old script, as one more value.
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = CommandLineBuilder.Invoke(
+            [command, "--package", "Mockly@1.10.0", "--json"], output, error);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Unrecognized command or argument '--json'", error.ToString());
+        Assert.DoesNotContain("missing a version", error.ToString());
     }
 
     [Fact]
@@ -133,14 +213,6 @@ public class CommandLineTests
         var result = CommandLineBuilder.Build().Parse(["install", "--include-transitive"]);
 
         Assert.NotEmpty(result.Errors);
-    }
-
-    [Fact]
-    public void Install_rejects_interactive_combined_with_json()
-    {
-        var result = CommandLineBuilder.Build().Parse(["install", "--interactive", "--json"]);
-
-        Assert.Contains(result.Errors, error => error.Message.Contains("--interactive and --json"));
     }
 
     [Fact]

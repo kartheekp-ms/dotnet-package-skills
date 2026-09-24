@@ -31,7 +31,12 @@ public class DestinationLockTests
                 }
                 else
                 {
-                    installer.Install(destination, [], dryRun: false);
+                    // A version without the skill removes it, which empties the destination.
+                    installer.Install(
+                        destination,
+                        [],
+                        dryRun: false,
+                        offered: new Dictionary<string, string> { ["Alpha"] = "2.0.0" });
                 }
             }
             catch (Exception error)

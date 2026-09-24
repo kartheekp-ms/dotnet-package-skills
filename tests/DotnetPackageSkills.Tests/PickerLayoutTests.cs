@@ -44,7 +44,7 @@ public class PickerLayoutTests
     public void Forty_six_columns_measure_wrapped_rows_and_wrapped_controls()
     {
         var items = Enumerable.Range(1, 24)
-            .Select(number => new SkillPickerItem($"skill-{number:00}", $"Package.{number}", "1.0.0", false))
+            .Select(number => new SkillPickerItem($"skill-{number:00}", $"Package.{number}", "1.0.0"))
             .ToArray();
 
         var layout = PickerLayout.For(items, "Skills for App.slnx", PickerMode.Install, 46, 18, true);
@@ -86,7 +86,7 @@ public class PickerLayoutTests
     public void A_wrapped_title_takes_space_away_from_entries_not_from_the_footer()
     {
         var items = Enumerable.Range(1, 24)
-            .Select(number => new SkillPickerItem($"skill-{number:00}", "P", "1", false, "short"))
+            .Select(number => new SkillPickerItem($"skill-{number:00}", "P", "1", "short"))
             .ToArray();
         var title = string.Join(" ", Enumerable.Repeat("titleword", 20));
 
@@ -103,16 +103,16 @@ public class PickerLayoutTests
     public void Page_counter_digit_growth_is_included_in_the_fixed_point()
     {
         var items = Enumerable.Range(1, 120)
-            .Select(number => new SkillPickerItem($"skill-{number:000}", "Package", "1.0.0", false))
+            .Select(number => new SkillPickerItem($"skill-{number:000}", "Package", "1.0.0"))
             .ToArray();
 
         var layout = PickerLayout.For(items, new string('t', 32), PickerMode.Install, 46, 18, true);
 
-        Assert.Equal(40, layout.Pages.Count);
+        Assert.Equal(30, layout.Pages.Count);
         Assert.Single(layout.Header(0));
-        Assert.Equal(2, layout.Header(39).Count);
-        Assert.Equal(39, layout.PageIndexFor(119));
-        Assert.All(layout.Pages, page => Assert.Equal(3, page.Count));
+        Assert.Equal(2, layout.Header(29).Count);
+        Assert.Equal(29, layout.PageIndexFor(119));
+        Assert.All(layout.Pages, page => Assert.Equal(4, page.Count));
         Assert.True(layout.MaxFrameHeight < 18);
     }
 
@@ -120,7 +120,7 @@ public class PickerLayoutTests
     public void Summary_reservation_measures_attainable_counts_not_impossible_combinations()
     {
         var items = Enumerable.Range(1, 10)
-            .Select(number => new SkillPickerItem($"skill-{number:00}", "P", "1", true, "Short."))
+            .Select(number => new SkillPickerItem($"skill-{number:00}", "P", "1", "Short."))
             .ToArray();
 
         var layout = PickerLayout.For(items, "Skills", PickerMode.Install, 45, 18, true);
@@ -138,7 +138,7 @@ public class PickerLayoutTests
     public void Package_metadata_does_not_consume_space_or_change_page_boundaries()
     {
         var items = Enumerable.Range(1, 12)
-            .Select(number => new SkillPickerItem($"skill-{number:00}", "P", "1", false, "A short description."))
+            .Select(number => new SkillPickerItem($"skill-{number:00}", "P", "1", "A short description."))
             .ToArray();
         var verboseMetadata = items.Select(item => item with
         {
@@ -163,8 +163,8 @@ public class PickerLayoutTests
         const string description = "One two three four five six seven eight nine ten.";
         var layout = PickerLayout.For(
             [
-                new SkillPickerItem("alpha", "P", "1", false, description),
-                new SkillPickerItem("longer-skill", "P", "1", false, description),
+                new SkillPickerItem("alpha", "P", "1", description),
+                new SkillPickerItem("longer-skill", "P", "1", description),
             ],
             "Skills", PickerMode.Install, 46, 24, true);
 
@@ -186,7 +186,7 @@ public class PickerLayoutTests
     public void Every_keyboard_hint_starts_with_Press_in_both_modes(bool uninstall)
     {
         var items = Enumerable.Range(1, 24)
-            .Select(number => new SkillPickerItem($"skill-{number:00}", "P", "1", uninstall, "Short."))
+            .Select(number => new SkillPickerItem($"skill-{number:00}", "P", "1", "Short."))
             .ToArray();
         var layout = PickerLayout.For(
             items, "Skills", uninstall ? PickerMode.Uninstall : PickerMode.Install, 100, 18, true);
@@ -199,6 +199,27 @@ public class PickerLayoutTests
         Assert.Equal(
             "(Press <Ctrl+Up>/<Ctrl+Down> to scroll description: 1-4/20)",
             PickerLayout.ScrollHelp(1, 4, 20));
+    }
+
+    [Fact]
+    public void A_window_too_small_for_the_note_drops_the_note_rather_than_the_checklist()
+    {
+        // At 46x18 the scrolling description needs every row the rest of the frame leaves, so the
+        // note under the title gives way. A roomier window keeps it.
+        const string note = "Installed skills aren't listed.";
+        const string title = "Which skills should be installed? (App.slnx)";
+        var items = new[]
+        {
+            new SkillPickerItem("skill-01", "P", "1", "short"),
+            new SkillPickerItem("skill-02", "P", "1", string.Join(" ", Enumerable.Repeat("word", 200))),
+        };
+
+        var small = PickerLayout.For(items, title, PickerMode.Install, 46, 18, true, note);
+        var roomy = PickerLayout.For(items, title, PickerMode.Install, 100, 30, true, note);
+
+        Assert.DoesNotContain(note, small.Header(0));
+        Assert.True(small.MaxFrameHeight < 18);
+        Assert.Contains(note, roomy.Header(0));
     }
 
     [Theory]
@@ -215,7 +236,7 @@ public class PickerLayoutTests
 
     private static PickerLayout Layout(int width, int height, int[] rows) => PickerLayout.For(
         rows.Select((count, index) => new SkillPickerItem(
-            $"skill-{index + 1:00}", "P", "1", false,
+            $"skill-{index + 1:00}", "P", "1",
             string.Join("\n", Enumerable.Range(1, count).Select(line => $"line {line:00}")))).ToArray(),
         "Skills", PickerMode.Install, width, height, true);
 }

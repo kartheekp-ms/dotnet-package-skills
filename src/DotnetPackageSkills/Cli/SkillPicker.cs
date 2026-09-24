@@ -11,20 +11,23 @@ internal sealed record SkillPickerItem(
     string Name,
     string Package,
     string Version,
-    bool Installed,
     string? Description = null,
-    string? DescriptionWarning = null,
-    bool Retained = false);
+    string? DescriptionWarning = null);
 
-/// <summary>A paged checklist whose ticks mean keep/install, or explicitly remove in uninstall mode.</summary>
+/// <summary>
+/// A paged checklist. Nothing starts ticked: a tick means install in install mode and remove in
+/// uninstall mode, so accepting without a choice changes nothing either way.
+/// </summary>
 internal sealed class SkillPicker(ITerminal terminal)
 {
     private static readonly TimeSpan InputPollInterval = TimeSpan.FromMilliseconds(100);
 
+    /// <param name="note">An optional line shown under the title, such as what the list leaves out.</param>
     public IReadOnlySet<string>? Choose(
         IReadOnlyList<SkillPickerItem> items,
         string title,
-        PickerMode mode = PickerMode.Install)
+        PickerMode mode = PickerMode.Install,
+        string? note = null)
     {
         if (items.Count == 0)
         {
@@ -39,16 +42,11 @@ internal sealed class SkillPicker(ITerminal terminal)
                       "Drop --interactive to install every discovered skill, or name the ones you want " +
                       "with --package."
                     : "--interactive needs a terminal, but input or output is redirected. " +
-                      "Drop --interactive to remove every installed skill, or name the package you " +
-                      "mean with --package.");
+                      "Drop --interactive to remove every skill that the command matches, and add " +
+                      "--dry-run to see which ones first.");
         }
 
-        // Accepting without making a choice never adds or removes anything.
-        var selected = new HashSet<int>(
-            mode == PickerMode.Install
-                ? items.Select((item, index) => (item, index))
-                    .Where(entry => entry.item.Installed).Select(entry => entry.index)
-                : []);
+        var selected = new HashSet<int>();
         var layout = Measure();
         var cursor = 0;
         int? pageOffset = null;
@@ -188,7 +186,7 @@ internal sealed class SkillPicker(ITerminal terminal)
         PickerLayout Measure()
         {
             var size = terminal.GetWindowSize();
-            return PickerLayout.For(items, title, mode, size.Width, size.Height, terminal.SupportsColor);
+            return PickerLayout.For(items, title, mode, size.Width, size.Height, terminal.SupportsColor, note);
         }
 
         void DrawFrame()
@@ -284,8 +282,8 @@ internal sealed class SkillPicker(ITerminal terminal)
         {
             var entry = layout.Entries[index];
             var isSelected = selected.Contains(index);
-            var pendingRemoval = mode == PickerMode.Uninstall ? isSelected : items[index].Installed && !isSelected;
-            var pendingInstall = mode == PickerMode.Install && !items[index].Installed && isSelected;
+            var pendingRemoval = mode == PickerMode.Uninstall && isSelected;
+            var pendingInstall = mode == PickerMode.Install && isSelected;
             var rowStyle = index == cursor ? TerminalStyle.Focus : TerminalStyle.Default;
             var bracketStyle = pendingRemoval ? TerminalStyle.Remove : rowStyle;
             var offset = page.Scrollable ? scroll[index] : 0;
@@ -310,12 +308,8 @@ internal sealed class SkillPicker(ITerminal terminal)
         }
 
         WriteRow(layout, frameTop, ref height);
-        var installing = items.Where((item, index) => !item.Installed && selected.Contains(index)).Count();
-        var removing = mode == PickerMode.Uninstall
-            ? selected.Count
-            : items.Where((item, index) => item.Installed && !selected.Contains(index)).Count();
         foreach (var line in TerminalText.Wrap(
-                     PickerLayout.Summary(selected.Count, items.Count, installing, removing, mode), layout.Width))
+                     PickerLayout.Summary(selected.Count, items.Count, mode), layout.Width))
         {
             WriteRow(layout, frameTop, ref height, new Span(line));
         }

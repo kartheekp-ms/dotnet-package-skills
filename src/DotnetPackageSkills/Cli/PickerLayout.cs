@@ -13,6 +13,7 @@ internal sealed class PickerLayout
     internal sealed record Page(int First, int Count, int VisibleRows, bool Scrollable);
 
     private readonly string _title;
+    private readonly string? _note;
     private readonly int _headerRows;
     private readonly int _footerRows;
     private readonly int[] _itemPages;
@@ -23,6 +24,7 @@ internal sealed class PickerLayout
         int width,
         bool supportsColor,
         string title,
+        string? note,
         IReadOnlyList<Entry> entries,
         IReadOnlyList<Page> pages,
         IReadOnlyList<string> help,
@@ -34,6 +36,7 @@ internal sealed class PickerLayout
         Width = width;
         SupportsColor = supportsColor;
         _title = title;
+        _note = note;
         Entries = entries;
         Pages = pages;
         Help = help;
@@ -74,7 +77,7 @@ internal sealed class PickerLayout
         return page.Scrollable ? Entries[item].Height - page.VisibleRows : 0;
     }
 
-    public IReadOnlyList<string> Header(int page) => Header(_title, page + 1, Pages.Count, Width);
+    public IReadOnlyList<string> Header(int page) => Header(_title, _note, page + 1, Pages.Count, Width);
 
     public static PickerLayout For(
         IReadOnlyList<SkillPickerItem> items,
@@ -82,21 +85,50 @@ internal sealed class PickerLayout
         PickerMode mode,
         int windowWidth,
         int windowHeight,
-        bool supportsColor)
+        bool supportsColor,
+        string? note = null)
+    {
+        if (note is null)
+        {
+            return Build(items, title, mode, windowWidth, windowHeight, supportsColor, note: null);
+        }
+
+        try
+        {
+            return Build(items, title, mode, windowWidth, windowHeight, supportsColor, note);
+        }
+        catch (PackageSkillsException)
+        {
+            // The note only explains what the list leaves out. A window without room for it
+            // keeps the checklist and loses the note, rather than refusing to open.
+            return Build(items, title, mode, windowWidth, windowHeight, supportsColor, note: null);
+        }
+    }
+
+    private static PickerLayout Build(
+        IReadOnlyList<SkillPickerItem> items,
+        string title,
+        PickerMode mode,
+        int windowWidth,
+        int windowHeight,
+        bool supportsColor,
+        string? note)
     {
         var labels = items.Select(item => TerminalText.Sanitize(item.Name)).ToArray();
         var descriptions = items.Select(DescriptionFor).ToArray();
         var cleanTitle = TerminalText.Sanitize(title);
+        var cleanNote = note is null ? null : TerminalText.Sanitize(note);
         var longestName = labels.Max(TerminalText.Width);
         var longestDescription = descriptions.Max(description => description.Split('\n').Max(TerminalText.Width));
         var prefix = supportsColor ? 6 : 8;
-        var summaryBounds = SummaryBounds(items, mode).ToArray();
+        var summaryBounds = new[] { Summary(items.Count, items.Count, mode) };
         var helpWidths = HelpFor(items.Count, items.Count, supportsColor, mode).Select(TerminalText.Width);
         var naturalWidth = new[]
         {
             labels.Select((label, index) => prefix + TerminalText.Width(label) + 3 +
                 descriptions[index].Split('\n').Max(TerminalText.Width)).Max(),
             TerminalText.Width(cleanTitle) + (items.Count > 1 ? 2 + Counter(items.Count, items.Count).Length : 0),
+            cleanNote is null ? 0 : TerminalText.Width(cleanNote),
             summaryBounds.Max(TerminalText.Width),
             helpWidths.Max(),
         }.Max();
@@ -128,7 +160,7 @@ internal sealed class PickerLayout
         var pageCount = 1;
         while (true)
         {
-            var headerRows = Header(cleanTitle, pageCount, pageCount, width).Count;
+            var headerRows = Header(cleanTitle, cleanNote, pageCount, pageCount, width).Count;
             var help = HelpFor(items.Count, pageCount, supportsColor, mode)
                 .SelectMany(line => TerminalText.Wrap(line, width)).ToArray();
             var footerRows = summaryBounds.Max(summary => TerminalText.Wrap(summary, width).Count) + help.Length;
@@ -142,7 +174,7 @@ internal sealed class PickerLayout
             if (pages.Count == pageCount)
             {
                 return new PickerLayout(
-                    windowWidth, windowHeight, width, supportsColor, cleanTitle,
+                    windowWidth, windowHeight, width, supportsColor, cleanTitle, cleanNote,
                     entries, pages, help, headerRows, footerRows);
             }
 
@@ -152,41 +184,18 @@ internal sealed class PickerLayout
         }
     }
 
-    public static string Summary(int selected, int total, int installing, int removing, PickerMode mode) =>
+    /// <summary>
+    /// Nothing on an install list is installed, so every tick is one install and the count needs
+    /// no second number. Every tick on an uninstall list is one removal, which is worth saying.
+    /// The widest summary is the one with every row ticked, so that is what layout measures.
+    /// </summary>
+    public static string Summary(int selected, int total, PickerMode mode) =>
         mode == PickerMode.Uninstall
-            ? $"{selected} of {total} selected; {removing} to remove"
-            : $"{selected} of {total} selected; {installing} to install; {removing} to remove";
+            ? $"{selected} of {total} selected; {selected} to remove"
+            : $"{selected} of {total} selected";
 
     public static string ScrollHelp(int first, int last, int total) =>
         $"(Press <Ctrl+Up>/<Ctrl+Down> to scroll description: {first}-{last}/{total})";
-
-    private static IEnumerable<string> SummaryBounds(IReadOnlyList<SkillPickerItem> items, PickerMode mode)
-    {
-        if (mode == PickerMode.Uninstall)
-        {
-            yield return Summary(items.Count, items.Count, 0, items.Count, mode);
-            yield break;
-        }
-
-        var installed = items.Count(item => item.Installed);
-        var available = items.Count - installed;
-        // Counts with the same number of digits wrap identically. In each pair of digit
-        // ranges, the largest addition and smallest removal maximize the selected count.
-        // This measures attainable summaries, not an impossible "all added AND all removed".
-        for (long additionLimit = 9; ; additionLimit = additionLimit * 10 + 9)
-        {
-            var adding = (int)Math.Min(available, additionLimit);
-            for (long removing = 0; removing <= installed; removing = removing == 0 ? 10 : removing * 10)
-            {
-                yield return Summary(installed - (int)removing + adding, items.Count, adding, (int)removing, mode);
-            }
-
-            if (additionLimit >= available)
-            {
-                yield break;
-            }
-        }
-    }
 
     private static int ScrollHelpRows(int lines, int width) =>
         TerminalText.Wrap(ScrollHelp(lines, lines, lines), width).Count;
@@ -230,21 +239,21 @@ internal sealed class PickerLayout
 
     private static string DescriptionFor(SkillPickerItem item)
     {
-        var prefix = item.Retained ? "Installed copy; kept unless you uncheck it. " : string.Empty;
         if (!string.IsNullOrWhiteSpace(item.DescriptionWarning))
         {
             var warning = TerminalText.Sanitize(item.DescriptionWarning);
-            return $"{prefix}Description unavailable: {(TerminalText.Width(warning) > 0 ? warning : "unreadable metadata.")}";
+            return $"Description unavailable: {(TerminalText.Width(warning) > 0 ? warning : "unreadable metadata.")}";
         }
 
         var description = TerminalText.Sanitize(item.Description, multiline: true);
-        return prefix + (TerminalText.Width(description) > 0 ? description : "No description provided.");
+        return TerminalText.Width(description) > 0 ? description : "No description provided.";
     }
 
-    private static IReadOnlyList<string> Header(string title, int page, int pages, int width)
+    private static IReadOnlyList<string> Header(string title, string? note, int page, int pages, int width)
     {
         var text = pages > 1 ? $"{title}  {Counter(page, pages)}" : title;
-        return TerminalText.Width(text) <= width ? [text] : TerminalText.Wrap(text, width);
+        IReadOnlyList<string> lines = TerminalText.Width(text) <= width ? [text] : TerminalText.Wrap(text, width);
+        return note is null ? lines : [.. lines, .. TerminalText.Wrap(note, width)];
     }
 
     private static string Counter(int page, int pages) => $"page {page} of {pages}";
@@ -267,8 +276,9 @@ internal sealed class PickerLayout
             : "(Press <Esc>/<q>/<Ctrl+C> to cancel)";
         yield return (supportsColor, mode) switch
         {
+            (true, PickerMode.Install) => "Blue X: selected",
             (true, _) => "Blue X: selected   Red brackets: remove",
-            (false, PickerMode.Install) => "+ install   - remove",
+            (false, PickerMode.Install) => "+ install",
             _ => "- remove",
         };
     }

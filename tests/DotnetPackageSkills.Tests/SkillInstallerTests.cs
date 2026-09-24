@@ -1,3 +1,4 @@
+using DotnetPackageSkills.NuGet;
 using DotnetPackageSkills.Skills;
 
 namespace DotnetPackageSkills.Tests;
@@ -63,12 +64,12 @@ public class SkillInstallerTests
             dryRun: false);
 
         var manifest = InstallManifest.Load(destination);
-        var contoso = Assert.Single(manifest.Installed, entry => entry.Package == "Contoso.Widgets");
         Assert.Equal(
             ["contoso.widgets-widget-testing", "contoso.widgets-widget-usage"],
-            contoso.Skills);
+            manifest.Packages["contoso.widgets"].Skills);
 
         var json = File.ReadAllText(Path.Combine(destination, InstallManifest.FileName));
+        Assert.Contains("\"packages\":", json);
         Assert.Contains("\"skills\":", json);
         Assert.DoesNotContain("\"path\":", json);
         Assert.DoesNotContain("\"skill\":", json);
@@ -97,23 +98,93 @@ public class SkillInstallerTests
 
         Assert.True(Directory.Exists(Path.Combine(destination, "mockly")));
         Assert.Empty(outcome.Removed);
-        Assert.Equal("1.11.0", Assert.Single(InstallManifest.Load(destination).Installed).Version);
+        Assert.Equal("1.11.0", Assert.Single(InstallManifest.Load(destination).Packages).Value.Version);
     }
 
-    [Fact]
-    public void Install_removes_skills_from_a_package_that_is_no_longer_referenced()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void An_upgrade_removes_the_skills_the_new_version_no_longer_ships(bool dryRun)
     {
         using var temp = new TempDirectory();
         var destination = temp.Combine("dest");
+        _installer.Install(
+            destination,
+            [Skill(temp, "Mockly", "1.10.0", "mockly-usage"), Skill(temp, "Mockly", "1.10.0", "mockly-migration")],
+            dryRun: false);
+        var before = Snapshot(destination);
 
+        var outcome = _installer.Install(destination, [Skill(temp, "Mockly", "1.11.0", "mockly-usage")], dryRun);
+
+        Assert.Equal("mockly-usage", Assert.Single(outcome.Installed).SkillName);
+        Assert.Equal(new TrackedSkill("mockly", "1.10.0", "mockly-migration"), Assert.Single(outcome.Removed));
+        if (dryRun)
+        {
+            Assert.Equal(before, Snapshot(destination));
+        }
+        else
+        {
+            Assert.False(Directory.Exists(Path.Combine(destination, "mockly-migration")));
+            var package = Assert.Single(InstallManifest.Load(destination).Packages);
+            Assert.Equal("1.11.0", package.Value.Version);
+            Assert.Equal(["mockly-usage"], package.Value.Skills);
+        }
+    }
+
+    [Fact]
+    public void An_upgrade_to_a_version_without_skills_removes_every_skill_of_that_package()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(
+            destination,
+            [Skill(temp, "Mockly", "1.10.0", "mockly-usage"), Skill(temp, "Contoso.Widgets", "2.3.0", "widget-usage")],
+            dryRun: false);
+
+        var outcome = _installer.Install(destination, [], dryRun: false, offered: Offer(("Mockly", "1.11.0")));
+
+        Assert.Equal("mockly-usage", Assert.Single(outcome.Removed).Skill);
+        Assert.False(Directory.Exists(Path.Combine(destination, "mockly-usage")));
+        Assert.Equal("contoso.widgets", Assert.Single(InstallManifest.Load(destination).Packages).Key);
+    }
+
+    [Fact]
+    public void The_same_version_never_removes_a_tracked_skill_it_does_not_ship()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(
+            destination,
+            [Skill(temp, "Mockly", "1.10.0", "mockly-usage"), Skill(temp, "Mockly", "1.10.0", "mockly-migration")],
+            dryRun: false);
+
+        // A package version never changes, so a skill missing from it means the cache is not
+        // what it was. Guessing that the author removed the skill would delete it on a hunch.
+        var outcome = _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly-usage")], dryRun: false);
+
+        Assert.Empty(outcome.Removed);
+        Assert.True(File.Exists(Path.Combine(destination, "mockly-migration", "SKILL.md")));
+        Assert.Equal(
+            ["mockly-migration", "mockly-usage"],
+            InstallManifest.Load(destination).Packages["mockly"].Skills);
+    }
+
+    [Fact]
+    public void Skills_of_packages_the_run_does_not_offer_are_kept_and_reported_as_untouched()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
         _installer.Install(
             destination,
             [Skill(temp, "Mockly", "1.10.0", "mockly"), Skill(temp, "Contoso.Widgets", "2.3.0", "widget-usage")],
             dryRun: false);
 
-        _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly")], dryRun: false);
+        var outcome = _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly")], dryRun: false);
 
-        Assert.False(Directory.Exists(Path.Combine(destination, "widget-usage")));
+        Assert.Empty(outcome.Removed);
+        Assert.Equal(new TrackedSkill("contoso.widgets", "2.3.0", "widget-usage"), Assert.Single(outcome.Untouched));
+        Assert.True(File.Exists(Path.Combine(destination, "widget-usage", "SKILL.md")));
+        Assert.Equal(["contoso.widgets", "mockly"], InstallManifest.Load(destination).Packages.Keys);
     }
 
     [Fact]
@@ -167,20 +238,20 @@ public class SkillInstallerTests
     }
 
     [Fact]
-    public void Pruning_the_last_tracked_skill_removes_the_manifest_like_uninstall_does()
+    public void Removing_the_last_tracked_skill_on_an_upgrade_removes_the_manifest_like_uninstall_does()
     {
         using var temp = new TempDirectory();
         var destination = temp.Combine("dest");
         _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly")], dryRun: false);
 
-        _installer.Install(destination, [], dryRun: false);
+        _installer.Install(destination, [], dryRun: false, offered: Offer(("Mockly", "1.11.0")));
 
         Assert.False(File.Exists(Path.Combine(destination, InstallManifest.FileName)));
         Assert.False(Directory.Exists(destination));
     }
 
     [Fact]
-    public void Pruning_everything_still_keeps_a_folder_holding_hand_authored_skills()
+    public void Removing_everything_still_keeps_a_folder_holding_hand_authored_skills()
     {
         using var temp = new TempDirectory();
         var destination = temp.Combine("dest");
@@ -188,7 +259,7 @@ public class SkillInstallerTests
 
         var handAuthored = temp.CreateFile("dest/our-own-skill/SKILL.md", "ours");
 
-        _installer.Install(destination, [], dryRun: false);
+        _installer.Install(destination, [], dryRun: false, offered: Offer(("Mockly", "1.11.0")));
 
         Assert.False(File.Exists(Path.Combine(destination, InstallManifest.FileName)));
         Assert.Equal("ours", File.ReadAllText(handAuthored));
@@ -200,7 +271,7 @@ public class SkillInstallerTests
         using var temp = new TempDirectory();
         var destination = temp.Combine("dest");
 
-        // Pruning is driven by the manifest, so a hand-authored skill sitting alongside
+        // Removal is driven by the manifest, so a hand-authored skill sitting alongside
         // package-provided ones has to survive every install.
         Directory.CreateDirectory(destination);
         var handAuthored = Path.Combine(destination, "our-own-skill");
@@ -208,9 +279,10 @@ public class SkillInstallerTests
         File.WriteAllText(Path.Combine(handAuthored, "SKILL.md"), "ours");
 
         _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly")], dryRun: false);
-        _installer.Install(destination, [], dryRun: false);
+        _installer.Install(destination, [], dryRun: false, offered: Offer(("Mockly", "2.0.0")));
 
         Assert.True(File.Exists(Path.Combine(handAuthored, "SKILL.md")));
+        Assert.False(Directory.Exists(Path.Combine(destination, "mockly")));
     }
 
     [Fact]
@@ -261,11 +333,11 @@ public class SkillInstallerTests
             destination,
             [Skill(temp, "Mockly", "1.10.0", "shared-skill")],
             dryRun: false,
-            prune: false);
+            offered: Offer());
 
         Assert.Empty(outcome.Installed);
         Assert.Single(outcome.Skipped);
-        Assert.Equal("Contoso.Widgets", Assert.Single(InstallManifest.Load(destination).Installed).Package);
+        Assert.Equal("contoso.widgets", Assert.Single(InstallManifest.Load(destination).Packages).Key);
     }
 
     [Theory]
@@ -289,8 +361,8 @@ public class SkillInstallerTests
 
         Assert.Empty(outcome.Installed);
         Assert.Empty(outcome.Removed);
-        Assert.Contains("Contoso.Widgets", Assert.Single(outcome.Skipped).Reason);
-        Assert.Equal("Contoso.Widgets", Assert.Single(InstallManifest.Load(destination).Installed).Package);
+        Assert.Contains("managed for contoso.widgets", Assert.Single(outcome.Skipped).Reason);
+        Assert.Equal("contoso.widgets", Assert.Single(InstallManifest.Load(destination).Packages).Key);
         Assert.Equal(contents, File.ReadAllBytes(Path.Combine(destination, "shared-skill", "SKILL.md")));
         Assert.Equal(manifest, File.ReadAllBytes(Path.Combine(destination, InstallManifest.FileName)));
     }
@@ -298,21 +370,68 @@ public class SkillInstallerTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void A_conflicting_copy_cannot_delete_its_current_owner_through_deselection(bool prune)
+    public void Moving_a_package_to_a_version_without_a_skill_that_another_package_ships_stops_before_any_change(
+        bool dryRun)
+    {
+        // Removing the old copy would hand its name to the other package, which takes an explicit
+        // uninstall. Keeping it would record the old version's copy under the new version, where
+        // no later run would ever remove it.
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(
+            destination,
+            [Skill(temp, "Alpha", "1.0.0", "alpha-usage"), Skill(temp, "Alpha", "1.0.0", "shared")],
+            dryRun: false);
+        var before = Snapshot(destination);
+
+        var error = Assert.Throws<PackageSkillsException>(() => _installer.Install(
+            destination,
+            [Skill(temp, "Alpha", "2.0.0", "alpha-usage"), Skill(temp, "Beta", "2.0.0", "shared")],
+            dryRun,
+            offered: Offer(("Alpha", "2.0.0"), ("Beta", "2.0.0"))));
+
+        Assert.Contains(
+            "Alpha 2.0.0 no longer ships the installed skill 'shared', and Beta 2.0.0 ships a skill with that name",
+            error.Message);
+        Assert.Contains("'dotnet package-skills uninstall --package Alpha' first", error.Message);
+        Assert.Contains("No skills were changed", error.Message);
+        Assert.Equal(before, Snapshot(destination));
+    }
+
+    [Fact]
+    public void A_conflicting_copy_keeps_its_owner_when_the_owners_package_is_not_part_of_the_run()
     {
         using var temp = new TempDirectory();
         var destination = temp.Combine("dest");
         _installer.Install(destination, [Skill(temp, "Alpha", "1.0.0", "shared")], dryRun: false);
 
         var result = _installer.Install(
-            destination, [Skill(temp, "Beta", "2.0.0", "shared")],
-            dryRun: false, prune: prune, deselected: ["shared"]);
+            destination,
+            [Skill(temp, "Beta", "2.0.0", "shared")],
+            dryRun: false,
+            offered: Offer(("Beta", "2.0.0")));
 
         Assert.Empty(result.Installed);
         Assert.Empty(result.Removed);
-        Assert.Single(result.Skipped);
-        Assert.Equal("Alpha", Assert.Single(InstallManifest.Load(destination).Installed).Package);
-        Assert.True(File.Exists(Path.Combine(destination, "shared", "SKILL.md")));
+        Assert.Contains("managed for alpha 1.0.0", Assert.Single(result.Skipped).Reason);
+        Assert.Equal(new TrackedSkill("alpha", "1.0.0", "shared"), Assert.Single(result.Untouched));
+        var alpha = InstallManifest.Load(destination).Packages["alpha"];
+        Assert.Equal("1.0.0", alpha.Version);
+        Assert.Equal(["shared"], alpha.Skills);
+    }
+
+    [Fact]
+    public void A_package_id_with_letters_outside_ascii_is_recorded_in_a_manifest_that_reads_back()
+    {
+        // NuGet accepts any Unicode letter in a package ID. A manifest that the tool's own reader
+        // refused would stop every later install and uninstall with advice that can't help.
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+
+        _installer.Install(destination, [Skill(temp, "Contoso.Überlib", "1.0.0", "uber-usage")], dryRun: false);
+
+        Assert.Equal("contoso.überlib", Assert.Single(InstallManifest.Load(destination).Packages).Key);
+        Assert.Single(_installer.Uninstall(destination, "Contoso.Überlib", null, dryRun: false));
     }
 
     [Theory]
@@ -336,7 +455,7 @@ public class SkillInstallerTests
             }
             else
             {
-                _installer.Install(destination, [], false, false, ["shared"], observed);
+                _installer.Install(destination, [], dryRun: false, offered: Offer(), expectedInstalled: observed);
             }
         });
 
@@ -346,18 +465,37 @@ public class SkillInstallerTests
     }
 
     [Fact]
-    public void Same_package_upgrades_remain_allowed_in_an_additive_selection()
+    public void Upgrading_one_package_leaves_the_other_packages_untouched()
     {
         using var temp = new TempDirectory();
         var destination = temp.Combine("dest");
-        _installer.Install(destination, [Skill(temp, "Alpha", "1.0.0", "shared")], dryRun: false);
+        _installer.Install(
+            destination,
+            [Skill(temp, "Alpha", "1.0.0", "shared"), Skill(temp, "Beta", "1.0.0", "beta")],
+            dryRun: false);
 
-        var result = _installer.Install(
-            destination, [Skill(temp, "Alpha", "2.0.0", "shared")], dryRun: false, prune: false);
+        var result = _installer.Install(destination, [Skill(temp, "Alpha", "2.0.0", "shared")], dryRun: false);
 
         Assert.Empty(result.Skipped);
         Assert.Single(result.Installed);
-        Assert.Equal("2.0.0", Assert.Single(InstallManifest.Load(destination).Installed).Version);
+        var manifest = InstallManifest.Load(destination);
+        Assert.Equal("2.0.0", manifest.Packages["alpha"].Version);
+        Assert.Equal("1.0.0", manifest.Packages["beta"].Version);
+    }
+
+    [Fact]
+    public void An_only_adding_install_cannot_record_a_second_version_of_a_package()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly-usage")], dryRun: false);
+        var before = Snapshot(destination);
+
+        var error = Assert.Throws<PackageSkillsException>(() => _installer.Install(
+            destination, [Skill(temp, "Mockly", "1.11.0", "mockly-testing")], dryRun: false, offered: Offer()));
+
+        Assert.Contains("only one version", error.Message);
+        Assert.Equal(before, Snapshot(destination));
     }
 
     [Theory]
@@ -383,15 +521,15 @@ public class SkillInstallerTests
     }
 
     [Fact]
-    public void Pruning_reports_removed_tracking_entries_even_when_the_folder_was_already_deleted()
+    public void An_upgrade_reports_removed_tracking_entries_even_when_the_folder_was_already_deleted()
     {
         using var temp = new TempDirectory();
         var destination = temp.Combine("dest");
         _installer.Install(destination, [Skill(temp, "Alpha", "1.0.0", "gone")], dryRun: false);
         Directory.Delete(Path.Combine(destination, "gone"), recursive: true);
 
-        var preview = _installer.Install(destination, [], dryRun: true);
-        var applied = _installer.Install(destination, [], dryRun: false);
+        var preview = _installer.Install(destination, [], dryRun: true, offered: Offer(("Alpha", "2.0.0")));
+        var applied = _installer.Install(destination, [], dryRun: false, offered: Offer(("Alpha", "2.0.0")));
 
         Assert.Equal(preview.Removed, applied.Removed);
         Assert.Equal("gone", Assert.Single(applied.Removed).Skill);
@@ -399,7 +537,7 @@ public class SkillInstallerTests
     }
 
     [Fact]
-    public void Install_removes_a_deselected_skill_even_when_the_install_is_additive()
+    public void An_only_adding_install_leaves_every_other_tracked_skill_alone()
     {
         using var temp = new TempDirectory();
         var destination = temp.Combine("dest");
@@ -407,76 +545,21 @@ public class SkillInstallerTests
             destination,
             [Skill(temp, "Mockly", "1.10.0", "mockly"), Skill(temp, "Contoso.Widgets", "2.3.0", "widget-usage")],
             dryRun: false);
-
-        // Additive normally means "this says nothing about the rest", but a deselection is an
-        // instruction rather than an inference, so it removes regardless.
-        var outcome = _installer.Install(
-            destination,
-            [Skill(temp, "Mockly", "1.10.0", "mockly")],
-            dryRun: false,
-            prune: false,
-            deselected: ["widget-usage"]);
-
-        Assert.Equal("widget-usage", Assert.Single(outcome.Removed).Skill);
-        Assert.False(Directory.Exists(Path.Combine(destination, "widget-usage")));
-        Assert.Equal("Mockly", Assert.Single(InstallManifest.Load(destination).Installed).Package);
-    }
-
-    [Fact]
-    public void Install_still_leaves_additive_skills_nobody_deselected()
-    {
-        using var temp = new TempDirectory();
-        var destination = temp.Combine("dest");
-        _installer.Install(
-            destination,
-            [Skill(temp, "Mockly", "1.10.0", "mockly"), Skill(temp, "Contoso.Widgets", "2.3.0", "widget-usage")],
-            dryRun: false);
-
-        _installer.Install(
-            destination,
-            [Skill(temp, "Mockly", "1.10.0", "mockly")],
-            dryRun: false,
-            prune: false,
-            deselected: []);
-
-        Assert.True(Directory.Exists(Path.Combine(destination, "widget-usage")));
-    }
-
-    [Fact]
-    public void Install_keeps_a_skill_that_is_both_selected_and_deselected()
-    {
-        using var temp = new TempDirectory();
-        var destination = temp.Combine("dest");
-        var skill = Skill(temp, "Mockly", "1.10.0", "mockly");
-        _installer.Install(destination, [skill], dryRun: false);
+        var installedCopy = temp.CreateFile("dest/mockly/local-notes.md", "edited after install");
 
         var outcome = _installer.Install(
             destination,
-            [skill],
+            [Skill(temp, "Gamma", "1.0.0", "gamma")],
             dryRun: false,
-            prune: false,
-            deselected: ["mockly"]);
+            offered: Offer());
 
+        Assert.Equal("gamma", Assert.Single(outcome.Installed).SkillName);
         Assert.Empty(outcome.Removed);
-        Assert.True(File.Exists(Path.Combine(destination, "mockly", "SKILL.md")));
-    }
-
-    [Fact]
-    public void Install_with_dryRun_reports_a_deselected_skill_without_removing_it()
-    {
-        using var temp = new TempDirectory();
-        var destination = temp.Combine("dest");
-        _installer.Install(destination, [Skill(temp, "Mockly", "1.10.0", "mockly")], dryRun: false);
-
-        var outcome = _installer.Install(
-            destination,
-            [],
-            dryRun: true,
-            prune: false,
-            deselected: ["mockly"]);
-
-        Assert.Equal("mockly", Assert.Single(outcome.Removed).Skill);
-        Assert.True(Directory.Exists(Path.Combine(destination, "mockly")));
+        Assert.Equal("edited after install", File.ReadAllText(installedCopy));
+        Assert.True(Directory.Exists(Path.Combine(destination, "widget-usage")));
+        Assert.Equal(
+            ["contoso.widgets", "gamma", "mockly"],
+            InstallManifest.Load(destination).Packages.Keys);
     }
 
     [Fact]
@@ -521,6 +604,31 @@ public class SkillInstallerTests
         {
             File.SetAttributes(source, File.GetAttributes(source) & ~FileAttributes.ReadOnly);
         }
+    }
+
+    [Fact]
+    public void Uninstall_against_references_removes_only_stale_skills_within_a_chosen_list()
+    {
+        using var temp = new TempDirectory();
+        var destination = temp.Combine("dest");
+        _installer.Install(
+            destination,
+            [
+                Skill(temp, "Mockly", "1.10.0", "mockly-usage"),
+                Skill(temp, "Mockly", "1.10.0", "mockly-setup"),
+                Skill(temp, "Contoso.Widgets", "2.3.0", "widget-usage"),
+            ],
+            dryRun: false);
+        PackageReferenceInfo[] references = [new("Contoso.Widgets", "2.3.0"), new("Mockly", "1.11.0")];
+
+        var removed = _installer.Uninstall(
+            destination, packageId: null, packageVersion: null, dryRun: false,
+            only: ["mockly-setup", "widget-usage"], staleAgainst: references);
+
+        // widget-usage was chosen, but the target still references its version.
+        Assert.Equal("mockly-setup", Assert.Single(removed).Skill);
+        Assert.True(Directory.Exists(Path.Combine(destination, "mockly-usage")));
+        Assert.True(Directory.Exists(Path.Combine(destination, "widget-usage")));
     }
 
     [Fact]
@@ -742,10 +850,11 @@ public class SkillInstallerTests
             var manifest = Path.Combine(destination, InstallManifest.FileName);
             File.WriteAllText(manifest, $$"""
                 {
-                  "installed": [
-                    {"package":"Contoso.Widgets","version":"2.3.0","skills":["already-installed"]},
-                    {"package":"Mockly","version":"1.10.0","skills":["{{unsafeName}}"]}
-                  ]
+                  "version": 1,
+                  "packages": {
+                    "contoso.widgets": {"version":"2.3.0","skills":["already-installed"]},
+                    "mockly": {"version":"1.10.0","skills":["{{unsafeName}}"]}
+                  }
                 }
                 """);
             var before = Snapshot(destination);
@@ -819,34 +928,16 @@ public class SkillInstallerTests
         Assert.Equal("ours", File.ReadAllText(handwritten));
     }
 
-    [Theory]
-    [InlineData("null")]
-    [InlineData("{}")]
-    [InlineData("""{"note":"missing ownership data"}""")]
-    [InlineData("""{"installed":[],"Installed":[]}""")]
-    [InlineData("""{"installed":null}""")]
-    [InlineData("""{"installed":[{"package":null,"version":"1.0.0","skills":["mockly"]}]}""")]
-    [InlineData("""{"installed":[{"package":"Mockly","version":"1.0.0","skills":[null]}]}""")]
-    [InlineData("""{"installed":[{"package":"Mockly","version":"1.0.0","skills":["../outside"]}]}""")]
-    [InlineData("""{"installed":[{"package":"Alpha","version":"1.0.0","skills":["shared"]},{"package":"Beta","version":"1.0.0","skills":["SHARED"]}]}""")]
-    [InlineData("""{"installed":[{"package":"Alpha","version":"1.0.0","skills":["shared","shared"]}]}""")]
-    public void A_manifest_with_an_unusable_shape_fails_instead_of_crashing_later(string contents)
-    {
-        using var temp = new TempDirectory();
-        var destination = temp.CreateDirectory("dest");
-        var manifest = Path.Combine(destination, InstallManifest.FileName);
-        File.WriteAllText(manifest, contents);
-
-        var error = Assert.Throws<PackageSkillsException>(() => InstallManifest.Load(destination));
-
-        Assert.Contains("could not read", error.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(contents, File.ReadAllText(manifest));
-    }
-
     private static (string Path, string Contents)[] Snapshot(string root) =>
-    [
-        .. Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-            .OrderBy(path => path, StringComparer.Ordinal)
-            .Select(path => (Path.GetRelativePath(root, path), Convert.ToHexString(File.ReadAllBytes(path)))),
-    ];
+        Directory.Exists(root)
+            ?
+            [
+                .. Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                    .OrderBy(path => path, StringComparer.Ordinal)
+                    .Select(path => (Path.GetRelativePath(root, path), Convert.ToHexString(File.ReadAllBytes(path)))),
+            ]
+            : [];
+
+    private static Dictionary<string, string> Offer(params (string Id, string Version)[] packages) =>
+        packages.ToDictionary(package => package.Id, package => package.Version, StringComparer.OrdinalIgnoreCase);
 }

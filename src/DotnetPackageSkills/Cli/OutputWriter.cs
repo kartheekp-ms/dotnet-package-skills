@@ -1,21 +1,10 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using DotnetPackageSkills.Skills;
 
 namespace DotnetPackageSkills.Cli;
 
-/// <summary>Renders results for humans, or as JSON for scripts and agents.</summary>
+/// <summary>Renders results for people. There is no machine-readable report.</summary>
 public sealed class OutputWriter(TextWriter output, TextWriter? errorOutput = null)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
-
-    public void WriteJson(object value) => output.WriteLine(JsonSerializer.Serialize(value, JsonOptions));
-
     /// <param name="copied">
     /// False for <c>list</c>, which discovers without writing, so the report says "Found"
     /// rather than claiming files were placed.
@@ -39,6 +28,15 @@ public sealed class OutputWriter(TextWriter output, TextWriter? errorOutput = nu
                 output.WriteLine($"  {Describe(skill.RelativePath, skill.PackageId, skill.PackageVersion)}");
             }
         }
+        else if (result.NothingNewToInstall)
+        {
+            // An interactive install lists only skills that are not installed. With nothing left
+            // to list there was no checklist, and the skipped section below says why when some
+            // skills could not be offered.
+            output.WriteLine(result.Skipped.Count == 0
+                ? "Nothing new to install. Every skill that these packages ship is already installed."
+                : "Nothing new to install.");
+        }
         else if (result.SkillsDiscovered > 0)
         {
             // Packages did ship skills; none of them ended up installed, because they were
@@ -46,15 +44,11 @@ public sealed class OutputWriter(TextWriter output, TextWriter? errorOutput = nu
             // sections below already explain what happened to each one.
             output.WriteLine($"{verb} no skills.");
         }
-        else if (result.NotOnDisk.Count > 0)
-        {
-            // We could not look inside every package, so we are in no position to say what
-            // they do or do not ship. The unextracted list below says what to do about it.
-            output.WriteLine("No bundled skills found.");
-        }
         else
         {
-            output.WriteLine("No bundled skills found. None of the scanned packages ship a skills/ folder.");
+            // Packages missing from the cache look exactly like packages without skills, so
+            // claim nothing about why the list is empty.
+            output.WriteLine("No bundled skills found.");
         }
 
         if (result.Removed.Count > 0)
@@ -69,8 +63,8 @@ public sealed class OutputWriter(TextWriter output, TextWriter? errorOutput = nu
             }
         }
 
+        WriteUnreferenced(result);
         WriteSkipped(result);
-        WriteNotOnDisk(result);
 
         if (result.Skills.Count > 0 && copied && !result.DryRun)
         {
@@ -96,6 +90,39 @@ public sealed class OutputWriter(TextWriter output, TextWriter? errorOutput = nu
         output.WriteLine();
     }
 
+    /// <summary>
+    /// Install never removes a skill because its package left the project, so say which ones
+    /// stayed and which command removes them.
+    /// </summary>
+    private void WriteUnreferenced(InstallResult result)
+    {
+        if (result.Unreferenced.Count == 0)
+        {
+            return;
+        }
+
+        var one = result.Unreferenced.Count == 1;
+        var packages = result.Unreferenced
+            .Select(entry => entry.Package)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count() == 1
+            ? "a package"
+            : "packages";
+
+        output.WriteLine();
+        output.WriteLine(
+            $"{Count(result.Unreferenced.Count, "installed skill")} {(one ? "belongs" : "belong")} to " +
+            $"{packages} that the target no longer references:");
+
+        foreach (var entry in result.Unreferenced)
+        {
+            output.WriteLine($"  {Describe(entry.Skill, entry.Package, entry.Version)}");
+        }
+
+        output.WriteLine(
+            $"Run '{TerminalText.Sanitize(result.StaleCommand)}' to remove {(one ? "it" : "them")}.");
+    }
+
     private void WriteSkipped(InstallResult result)
     {
         if (result.Skipped.Count == 0)
@@ -113,32 +140,29 @@ public sealed class OutputWriter(TextWriter output, TextWriter? errorOutput = nu
         }
     }
 
-    private void WriteNotOnDisk(InstallResult result)
+    /// <param name="target">
+    /// The solution or project that <c>uninstall --stale</c> compared against, or null for a
+    /// plain uninstall.
+    /// </param>
+    public void WriteUninstallReport(
+        IReadOnlyList<TrackedSkill> removed,
+        string destination,
+        bool dryRun,
+        string? target = null)
     {
-        if (result.NotOnDisk.Count == 0)
+        if (target is not null)
         {
-            return;
+            output.WriteLine($"Target:      {TerminalText.Sanitize(target)}");
         }
 
-        output.WriteLine();
-        output.WriteLine(
-            $"{Count(result.NotOnDisk.Count, "package")} resolved but not extracted in the NuGet cache. " +
-            "Run 'dotnet restore' and try again:");
-
-        foreach (var package in result.NotOnDisk)
-        {
-            output.WriteLine($"  {TerminalText.Sanitize(package)}");
-        }
-    }
-
-    public void WriteUninstallReport(IReadOnlyList<TrackedSkill> removed, string destination, bool dryRun)
-    {
         output.WriteLine($"Destination: {TerminalText.Sanitize(destination)}");
         output.WriteLine();
 
         if (removed.Count == 0)
         {
-            output.WriteLine("Nothing to remove. No skills installed by this tool were found there.");
+            output.WriteLine(target is null
+                ? "Nothing to remove. No skills installed by this tool were found there."
+                : "Nothing to remove. No stale skills were found.");
             return;
         }
 

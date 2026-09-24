@@ -115,6 +115,26 @@ public class SkillPickerTests
     }
 
     [Fact]
+    public void A_note_under_the_title_is_shown_on_every_page_and_fits_the_frame()
+    {
+        const string Note = "Installed skills aren't listed.";
+        var terminal = new FakeTerminal(windowHeight: 18, windowWidth: 46)
+            .Press(ConsoleKey.PageDown, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(24), Title, PickerMode.Install, Note);
+
+        Assert.All(terminal.Frames, frame =>
+        {
+            var lines = frame.Split(Environment.NewLine).Select(line => line.TrimEnd()).ToArray();
+            Assert.StartsWith(Title, lines[0]);
+            Assert.Equal(Note, lines[1]);
+            Assert.Equal(string.Empty, lines[2]);
+        });
+        Assert.Contains("page 2 of", terminal.Frames[1]);
+        AssertWithinWindow(terminal);
+    }
+
+    [Fact]
     public void Picker_shows_one_page_of_skills_at_a_time()
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
@@ -129,19 +149,21 @@ public class SkillPickerTests
     }
 
     [Fact]
-    public void Already_installed_skills_start_selected_and_neutral()
+    public void An_install_list_starts_with_nothing_ticked()
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
 
-        new SkillPicker(terminal).Choose(Items(3, installed: [2]), Title);
+        var choice = new SkillPicker(terminal).Choose(Items(3), Title);
 
         var frame = terminal.Frames[0];
         Assert.Contains("[ ] skill-01", frame);
-        Assert.Contains("[X] skill-02", frame);
+        Assert.Contains("[ ] skill-02", frame);
+        Assert.Contains("[ ] skill-03", frame);
+        Assert.DoesNotContain("[X]", frame);
         Assert.DoesNotContain("installed", frame);
+        Assert.Empty(choice!);
         Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 0, 1).Style);
         Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 0, 2).Style);
-        Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 0, 2, "X").Style);
     }
 
     [Fact]
@@ -149,12 +171,12 @@ public class SkillPickerTests
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
 
-        new SkillPicker(terminal).Choose(Items(4, installed: [2, 4]), Title);
+        new SkillPicker(terminal).Choose(Items(4), Title);
 
         var rows = Rows(terminal.Frames[0]);
 
         Assert.Equal("[ ] skill-01 - No description provided.", rows[0]);
-        Assert.Equal("[X] skill-02 - No description provided.", rows[1]);
+        Assert.Equal("[ ] skill-02 - No description provided.", rows[1]);
     }
 
     [Fact]
@@ -174,32 +196,17 @@ public class SkillPickerTests
     }
 
     [Fact]
-    public void Unticking_an_installed_skill_colors_its_brackets_red_not_its_name()
+    public void An_install_list_never_marks_a_row_for_removal()
     {
-        var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
+        var terminal = new FakeTerminal()
+            .Press(ConsoleKey.Spacebar, ConsoleKey.Spacebar, ConsoleKey.A, ConsoleKey.C, ConsoleKey.Enter);
 
-        new SkillPicker(terminal).Choose(Items(3, installed: [1]), Title);
+        new SkillPicker(terminal).Choose(Items(3), Title);
 
-        Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 0, 1).Style);
-        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 1, 1, "[").Style);
-        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 1, 1, "]").Style);
-        Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 1, 1).Style);
-        Assert.Equal("[ ] skill-01 - No description provided.", Rows(terminal.Frames[1])[0]);
-        Assert.DoesNotContain("will remove", terminal.Frames[1]);
-    }
-
-    [Fact]
-    public void Ticking_a_skill_back_on_clears_the_pending_removal()
-    {
-        var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Spacebar, ConsoleKey.Enter);
-
-        new SkillPicker(terminal).Choose(Items(3, installed: [1]), Title);
-
-        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 1, 1, "[").Style);
-        Assert.Equal(TerminalStyle.Focus, CheckboxSpan(terminal, 2, 1, "[").Style);
-        Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 2, 1, "X").Style);
-        Assert.Contains("0 to remove", terminal.Frames[2]);
-        Assert.Equal("[X] skill-01 - No description provided.", Rows(terminal.Frames[2])[0]);
+        Assert.All(terminal.FrameWrites, writes =>
+            Assert.DoesNotContain(writes, write => write.Style == TerminalStyle.Remove));
+        Assert.All(terminal.Frames, frame =>
+            Assert.DoesNotContain("remove", frame, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -232,18 +239,6 @@ public class SkillPickerTests
         return Assert.Single(terminal.FrameWrites[frame], write => write.Top == row && write.Text == part);
     }
 
-    /// <summary>
-    /// Installed skills the user left unticked, which is what install treats as a removal.
-    /// The picker returns only what was ticked, so the caller works this out — and so does
-    /// this helper, the same way.
-    /// </summary>
-    private static List<string> Deselected(IReadOnlySet<string> chosen, params int[] installed) =>
-    [
-        .. installed
-            .Select(number => $"skill-{number:00}")
-            .Where(name => !chosen.Contains(name)),
-    ];
-
     [Fact]
     public void Uninstalling_starts_with_nothing_ticked()
     {
@@ -252,7 +247,7 @@ public class SkillPickerTests
         // Every row is installed, and a tick deletes. Pre-ticking them would make a mistaken
         // enter wipe the lot.
         var choice = new SkillPicker(terminal)
-            .Choose(Items(5, installed: [1, 2, 3, 4, 5]), Title, PickerMode.Uninstall);
+            .Choose(Items(5), Title, PickerMode.Uninstall);
 
         Assert.NotNull(choice);
         Assert.Empty(choice);
@@ -264,7 +259,7 @@ public class SkillPickerTests
         var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
 
         var choice = new SkillPicker(terminal)
-            .Choose(Items(3, installed: [1, 2, 3]), Title, PickerMode.Uninstall);
+            .Choose(Items(3), Title, PickerMode.Uninstall);
 
         Assert.Equal("skill-01", Assert.Single(choice!));
         Assert.Equal("[X] skill-01 - No description provided.", Rows(terminal.Frames[1])[0]);
@@ -279,7 +274,7 @@ public class SkillPickerTests
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
 
-        new SkillPicker(terminal).Choose(Items(3, installed: [1, 2, 3]), Title, PickerMode.Uninstall);
+        new SkillPicker(terminal).Choose(Items(3), Title, PickerMode.Uninstall);
 
         var frame = terminal.Frames[0];
         Assert.DoesNotContain("installed", frame);
@@ -293,7 +288,7 @@ public class SkillPickerTests
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
 
-        new SkillPicker(terminal).Choose(Items(4, installed: [1, 2, 3, 4]), Title, PickerMode.Uninstall);
+        new SkillPicker(terminal).Choose(Items(4), Title, PickerMode.Uninstall);
 
         Assert.Contains("0 of 4 selected; 0 to remove", terminal.Frames[0]);
         Assert.Contains("1 of 4 selected; 1 to remove", terminal.Frames[1]);
@@ -306,7 +301,7 @@ public class SkillPickerTests
         var terminal = new FakeTerminal().Press(ConsoleKey.A, ConsoleKey.Enter);
 
         var choice = new SkillPicker(terminal)
-            .Choose(Items(24, installed: Enumerable.Range(1, 24).ToArray()), Title, PickerMode.Uninstall);
+            .Choose(Items(24), Title, PickerMode.Uninstall);
 
         Assert.Equal(24, choice!.Count);
     }
@@ -317,7 +312,7 @@ public class SkillPickerTests
         var terminal = new FakeTerminal().Press(ConsoleKey.A, ConsoleKey.Escape);
 
         Assert.Null(new SkillPicker(terminal)
-            .Choose(Items(5, installed: [1, 2, 3, 4, 5]), Title, PickerMode.Uninstall));
+            .Choose(Items(5), Title, PickerMode.Uninstall));
     }
 
     [Fact]
@@ -329,20 +324,21 @@ public class SkillPickerTests
             () => new SkillPicker(terminal).Choose(Items(3), Title, PickerMode.Uninstall));
 
         // The install wording tells you to drop the flag and install everything, which is the
-        // opposite of what this command would then do.
-        Assert.Contains("remove every installed skill", error.Message);
+        // opposite of what this command would then do. It also can't point at --package, which
+        // uninstall --stale refuses.
+        Assert.Contains("remove every skill that the command matches", error.Message);
+        Assert.DoesNotContain("--package", error.Message);
     }
 
     [Fact]
-    public void Pressing_enter_immediately_keeps_exactly_what_is_installed()
+    public void Pressing_enter_immediately_installs_nothing()
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
 
-        var choice = new SkillPicker(terminal).Choose(Items(5, installed: [2, 4]), Title);
+        var choice = new SkillPicker(terminal).Choose(Items(5), Title);
 
         Assert.NotNull(choice);
-        Assert.Equal(["skill-02", "skill-04"], choice);
-        Assert.Empty(Deselected(choice, 2, 4));
+        Assert.Empty(choice);
     }
 
     [Fact]
@@ -441,15 +437,14 @@ public class SkillPickerTests
     }
 
     [Fact]
-    public void Turning_off_an_installed_skill_reports_it_for_removal()
+    public void Pressing_space_again_unticks_the_skill()
     {
-        var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
+        var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Spacebar, ConsoleKey.Enter);
 
-        var choice = new SkillPicker(terminal).Choose(Items(3, installed: [1]), Title);
+        var choice = new SkillPicker(terminal).Choose(Items(3), Title);
 
         Assert.NotNull(choice);
         Assert.Empty(choice);
-        Assert.Equal("skill-01", Assert.Single(Deselected(choice, 1)));
     }
 
     [Fact]
@@ -461,32 +456,30 @@ public class SkillPickerTests
 
         Assert.NotNull(choice);
         Assert.Equal(24, choice.Count);
-        Assert.Empty(Deselected(choice));
     }
 
     [Fact]
-    public void C_clears_every_skill_and_marks_the_installed_ones_for_removal()
+    public void C_clears_every_skill_on_every_page()
     {
-        var terminal = new FakeTerminal().Press(ConsoleKey.C, ConsoleKey.Enter);
+        var terminal = new FakeTerminal().Press(ConsoleKey.A, ConsoleKey.C, ConsoleKey.Enter);
 
-        var choice = new SkillPicker(terminal).Choose(Items(24, installed: [3, 17]), Title);
+        var choice = new SkillPicker(terminal).Choose(Items(24), Title);
 
         Assert.NotNull(choice);
         Assert.Empty(choice);
-        Assert.Equal(["skill-03", "skill-17"], Deselected(choice, 3, 17));
     }
 
     [Fact]
-    public void The_summary_counts_selections_and_pending_removals()
+    public void The_install_summary_counts_selections_only()
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
 
-        new SkillPicker(terminal).Choose(Items(5, installed: [1, 2]), Title);
+        new SkillPicker(terminal).Choose(Items(5), Title);
 
-        Assert.Contains("2 of 5 selected", terminal.Frames[0]);
-        Assert.Contains("0 to install; 0 to remove", terminal.Frames[0]);
+        Assert.Contains("0 of 5 selected", terminal.Frames[0]);
         Assert.Contains("1 of 5 selected", terminal.Frames[1]);
-        Assert.Contains("1 to remove", terminal.Frames[1]);
+        Assert.DoesNotContain("to install", terminal.Frames[1]);
+        Assert.DoesNotContain("to remove", terminal.Frames[1]);
     }
 
     [Fact]
@@ -503,7 +496,7 @@ public class SkillPickerTests
         var terminal = new FakeTerminal().PressWith(ConsoleModifiers.Control, ConsoleKey.C);
 
         // A bare 'c' clears the selection and keeps going, so the modifier has to win.
-        Assert.Null(new SkillPicker(terminal).Choose(Items(5, installed: [1, 2]), Title));
+        Assert.Null(new SkillPicker(terminal).Choose(Items(5), Title));
     }
 
     [Fact]
@@ -754,7 +747,7 @@ public class SkillPickerTests
 
         new SkillPicker(terminal).Choose(
             [
-                new SkillPickerItem(name, "Some.Package", "1.0.0", Installed: false),
+                new SkillPickerItem(name, "Some.Package", "1.0.0"),
             ],
             Title);
 
@@ -772,7 +765,7 @@ public class SkillPickerTests
 
         new SkillPicker(terminal).Choose(
             [
-                new SkillPickerItem(name, "Contoso.Widgets", "2.3.0", Installed: false),
+                new SkillPickerItem(name, "Contoso.Widgets", "2.3.0"),
             ],
             Title);
 
@@ -788,7 +781,7 @@ public class SkillPickerTests
 
         new SkillPicker(terminal).Choose(
             [
-                new SkillPickerItem(name, "Contoso.Widgets", "2.3.0", Installed: false),
+                new SkillPickerItem(name, "Contoso.Widgets", "2.3.0"),
             ],
             Title);
 
@@ -810,7 +803,7 @@ public class SkillPickerTests
 
             new SkillPicker(terminal).Choose(
                 [
-                    new SkillPickerItem(Name, "Contoso.Widgets", "2.3.0", Installed: true),
+                    new SkillPickerItem(Name, "Contoso.Widgets", "2.3.0"),
                 ],
                 Title);
 
@@ -829,7 +822,7 @@ public class SkillPickerTests
         // Changing counts or focus must not leave an earlier row showing through.
         var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
 
-        new SkillPicker(terminal).Choose(Items(3, installed: [1]), Title);
+        new SkillPicker(terminal).Choose(Items(3), Title);
 
         var lengths = terminal.Frames[0].Split(Environment.NewLine).Select(line => line.Length).Distinct();
         Assert.Single(lengths);
@@ -938,11 +931,10 @@ public class SkillPickerTests
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
 
-        var choice = new SkillPicker(terminal).Choose(Items(1, installed: [1]), Title);
+        var choice = new SkillPicker(terminal).Choose(Items(1), Title);
 
         Assert.NotNull(choice);
-        Assert.Empty(choice);
-        Assert.Equal("skill-01", Assert.Single(Deselected(choice, 1)));
+        Assert.Equal("skill-01", Assert.Single(choice));
     }
 
     [Fact]
@@ -975,7 +967,7 @@ public class SkillPickerTests
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.Enter);
 
-        new SkillPicker(terminal).Choose(Items(24, installed: [1]), Title);
+        new SkillPicker(terminal).Choose(Items(24), Title);
 
         // Windows consoles default to an OEM code page that silently drops arrows and box
         // glyphs, so a legend built from them reads as gaps on the most common terminal.
@@ -1039,10 +1031,10 @@ public class SkillPickerTests
         var mode = uninstall ? PickerMode.Uninstall : PickerMode.Install;
 
         new SkillPicker(terminal).Choose(
-            [new SkillPickerItem("alpha", "Pkg", "1.2.3", true, "Short description.")], Title, mode);
+            [new SkillPickerItem("alpha", "Pkg", "1.2.3", "Short description.")], Title, mode);
 
         var row = Assert.Single(Rows(terminal.Frames[0]));
-        Assert.Equal($"[{(uninstall ? ' ' : 'X')}] alpha - Short description.", row);
+        Assert.Equal("[ ] alpha - Short description.", row);
         var description = Assert.Single(terminal.FrameWrites[0], write => write.Text == " - Short description.");
         Assert.Equal(11, description.Left);
         Assert.Equal(TerminalStyle.Focus, description.Style);
@@ -1062,7 +1054,7 @@ public class SkillPickerTests
         var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
 
         var chosen = new SkillPicker(terminal).Choose(
-            [new SkillPickerItem("alpha", "Pkg", "1", false, description)], Title);
+            [new SkillPickerItem("alpha", "Pkg", "1", description)], Title);
 
         Assert.Equal("alpha", Assert.Single(chosen!));
         Assert.Contains(" - No description provided.", terminal.Frames[0]);
@@ -1077,7 +1069,7 @@ public class SkillPickerTests
         var mode = uninstall ? PickerMode.Uninstall : PickerMode.Install;
 
         var chosen = new SkillPicker(terminal).Choose(
-            [new SkillPickerItem("alpha", "Pkg", "1", false, "stale text", "cannot read SKILL.md.")],
+            [new SkillPickerItem("alpha", "Pkg", "1", "stale text", "cannot read SKILL.md.")],
             Title, mode);
 
         Assert.Equal("alpha", Assert.Single(chosen!));
@@ -1092,14 +1084,14 @@ public class SkillPickerTests
         var terminal = new FakeTerminal(windowHeight: 18, windowWidth: 46).Press(ConsoleKey.Enter);
 
         new SkillPicker(terminal).Choose(
-            [new SkillPickerItem("alpha", "Pkg", "1.2.3", false,
+            [new SkillPickerItem("alpha", "Pkg", "1.2.3",
                 "One two three four five six seven eight nine ten.")], Title);
 
         var lines = terminal.Frames[0].Split(Environment.NewLine).Select(line => line.TrimEnd()).ToArray();
         Assert.Equal("> [ ] alpha - One two three four five six", lines[2]);
         Assert.Equal(new string(' ', 6) + "seven eight nine ten.", lines[3]);
         Assert.Equal(string.Empty, lines[4]);
-        Assert.StartsWith("0 of 1 selected;", lines[5]);
+        Assert.Equal("0 of 1 selected", lines[5]);
         AssertWithinWindow(terminal);
     }
 
@@ -1110,8 +1102,8 @@ public class SkillPickerTests
 
         new SkillPicker(terminal).Choose(
             [
-                new SkillPickerItem("alpha", "Pkg", "1.2.3", false, "First."),
-                new SkillPickerItem("beta", "Pkg", "1.2.3", false, "Second."),
+                new SkillPickerItem("alpha", "Pkg", "1.2.3", "First."),
+                new SkillPickerItem("beta", "Pkg", "1.2.3", "Second."),
             ],
             Title);
 
@@ -1134,7 +1126,7 @@ public class SkillPickerTests
         const string name = "contoso.widgets-batching";
 
         var chosen = new SkillPicker(terminal).Choose(
-            [new SkillPickerItem(name, "Contoso.Widgets", "2.3.0", uninstall, "Batching widget calls.")],
+            [new SkillPickerItem(name, "Contoso.Widgets", "2.3.0", "Batching widget calls.")],
             Title,
             uninstall ? PickerMode.Uninstall : PickerMode.Install);
 
@@ -1166,29 +1158,31 @@ public class SkillPickerTests
     }
 
     [Fact]
-    public void Pending_additions_and_removals_have_separate_counts_and_colors()
+    public void Ticked_additions_are_counted_and_only_their_X_is_colored()
     {
         var terminal = new FakeTerminal()
             .Press(ConsoleKey.Spacebar, ConsoleKey.DownArrow, ConsoleKey.Spacebar, ConsoleKey.Enter);
 
-        var chosen = new SkillPicker(terminal).Choose(Items(3, installed: [2]), Title);
+        var chosen = new SkillPicker(terminal).Choose(Items(3), Title);
 
-        Assert.Equal("skill-01", Assert.Single(chosen!));
-        Assert.Contains("1 of 3 selected; 1 to install; 1 to remove", terminal.Frames[^1]);
+        Assert.Equal(["skill-01", "skill-02"], chosen!.Order(StringComparer.Ordinal));
+        Assert.Contains("2 of 3 selected", terminal.Frames[^1]);
         Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 3, 1).Style);
         Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 3, 1, "X").Style);
-        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 3, 2, "[").Style);
+        Assert.Equal(TerminalStyle.Default, CheckboxSpan(terminal, 3, 1, "[").Style);
+        Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 3, 2, "X").Style);
+        Assert.Equal(TerminalStyle.Focus, CheckboxSpan(terminal, 3, 2, "[").Style);
         Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 3, 2).Style);
         Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 3, 3).Style);
     }
 
     [Fact]
-    public void Blue_focus_covers_the_row_but_pending_removal_brackets_stay_red()
+    public void Blue_focus_covers_the_row_but_removal_brackets_stay_red()
     {
         var terminal = new FakeTerminal()
             .Press(ConsoleKey.Spacebar, ConsoleKey.DownArrow, ConsoleKey.Spacebar, ConsoleKey.UpArrow, ConsoleKey.Enter);
 
-        new SkillPicker(terminal).Choose(Items(3, installed: [2]), Title);
+        new SkillPicker(terminal).Choose(Items(3), Title, PickerMode.Uninstall);
 
         Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 1, 1).Style);
         Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 2, 1).Style);
@@ -1216,8 +1210,8 @@ public class SkillPickerTests
 
         new SkillPicker(terminal).Choose(
             [
-                new SkillPickerItem("alpha", "Pkg", "1", uninstall, "First line.\nSecond line.\nThird line."),
-                new SkillPickerItem("beta", "Pkg", "1", uninstall, "Another line.\nAnother continuation."),
+                new SkillPickerItem("alpha", "Pkg", "1", "First line.\nSecond line.\nThird line."),
+                new SkillPickerItem("beta", "Pkg", "1", "Another line.\nAnother continuation."),
             ],
             Title, uninstall ? PickerMode.Uninstall : PickerMode.Install);
 
@@ -1249,7 +1243,7 @@ public class SkillPickerTests
         Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 1, 1, "X").Style);
         Assert.DoesNotContain(terminal.FrameWrites[2], write => write.Text == "X");
         Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 2, 1).Style);
-        Assert.Contains("0 to install; 0 to remove", terminal.Frames[2]);
+        Assert.Contains("0 of 3 selected", terminal.Frames[2]);
     }
 
     [Fact]
@@ -1257,7 +1251,7 @@ public class SkillPickerTests
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Spacebar, ConsoleKey.Enter);
 
-        var chosen = new SkillPicker(terminal).Choose(Items(3, installed: [1, 2, 3]), Title, PickerMode.Uninstall);
+        var chosen = new SkillPicker(terminal).Choose(Items(3), Title, PickerMode.Uninstall);
 
         Assert.Empty(chosen!);
         Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 1, 1, "[").Style);
@@ -1267,28 +1261,28 @@ public class SkillPickerTests
     }
 
     [Fact]
-    public void No_color_install_mode_uses_action_markers_in_the_prefix()
+    public void No_color_install_mode_uses_only_the_addition_marker()
     {
         var terminal = new FakeTerminal { SupportsColor = false };
         terminal.Press(ConsoleKey.A, ConsoleKey.C, ConsoleKey.Spacebar, ConsoleKey.Enter);
 
-        var chosen = new SkillPicker(terminal).Choose(Items(3, installed: [2]), Title);
+        var chosen = new SkillPicker(terminal).Choose(Items(3), Title);
 
         Assert.Equal("skill-01", Assert.Single(chosen!));
         Assert.Contains(">   [ ] skill-01", terminal.Frames[0]);
         Assert.Contains("> + [X] skill-01", terminal.Frames[1]);
+        Assert.Contains("  + [X] skill-02", terminal.Frames[1]);
         Assert.Contains("  + [X] skill-03", terminal.Frames[1]);
-        Assert.DoesNotContain("  + [X] skill-02", terminal.Frames[1]);
-        Assert.Contains("  - [ ] skill-02", terminal.Frames[2]);
+        Assert.Contains("    [ ] skill-02", terminal.Frames[2]);
         Assert.Contains("> + [X] skill-01", terminal.Frames[3]);
-        Assert.Contains("  - [ ] skill-02", terminal.Frames[3]);
-        Assert.Contains("+ install", terminal.Frames[3]);
-        Assert.Contains("- remove", terminal.Frames[3]);
+        Assert.Contains("    [ ] skill-02", terminal.Frames[3]);
         Assert.All(terminal.StyleEvents, style => Assert.Equal(TerminalStyle.Default, style));
         Assert.All(terminal.Frames, frame =>
         {
+            Assert.Contains("+ install", frame);
+            Assert.DoesNotContain("- remove", frame);
+            Assert.DoesNotContain("- [", frame);
             Assert.DoesNotContain("will install", frame);
-            Assert.DoesNotContain("will remove", frame);
         });
     }
 
@@ -1298,7 +1292,7 @@ public class SkillPickerTests
         var terminal = new FakeTerminal { SupportsColor = false };
         terminal.Press(ConsoleKey.Spacebar, ConsoleKey.Spacebar, ConsoleKey.A, ConsoleKey.C, ConsoleKey.Enter);
 
-        var chosen = new SkillPicker(terminal).Choose(Items(3, installed: [1, 2, 3]), Title, PickerMode.Uninstall);
+        var chosen = new SkillPicker(terminal).Choose(Items(3), Title, PickerMode.Uninstall);
 
         Assert.Empty(chosen!);
         Assert.Contains("> - [X] skill-01", terminal.Frames[1]);
@@ -1370,7 +1364,7 @@ public class SkillPickerTests
     [Fact]
     public void Changing_actions_and_focus_never_changes_page_membership()
     {
-        var items = Items(24, installed: Enumerable.Range(1, 24).ToArray())
+        var items = Items(24)
             .Select(item => item with { Description = "Short." }).ToArray();
         var terminal = new FakeTerminal(windowHeight: 18, windowWidth: 46)
             .Press(ConsoleKey.C, ConsoleKey.A, ConsoleKey.DownArrow, ConsoleKey.Spacebar, ConsoleKey.Enter);
@@ -1380,7 +1374,7 @@ public class SkillPickerTests
         Assert.All(terminal.Frames, frame => Assert.Equal(FrameSkillNames(terminal.Frames[0]), FrameSkillNames(frame)));
         Assert.Equal(Enumerable.Range(1, 5).Select(number => $"skill-{number:00}"), FrameSkillNames(terminal.Frames[0]));
         Assert.Equal(SkillSpan(terminal, 0, 1).Top, SkillSpan(terminal, 4, 1).Top);
-        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 1, 1, "[").Style);
+        Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 2, 2, "X").Style);
         Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 2, 1).Style);
         AssertWithinWindow(terminal);
     }
@@ -1389,17 +1383,19 @@ public class SkillPickerTests
     public void A_growing_then_shrinking_summary_wraps_without_repaginating_or_leaving_old_footer_rows()
     {
         var items = Items(100).Select(item => item with { Description = "Short." }).ToArray();
-        var terminal = new FakeTerminal(windowHeight: 18, windowWidth: 46)
+        // At this width the empty uninstall summary fits on one line and the full one does not,
+        // so selecting everything grows the footer by a row and clearing shrinks it again.
+        var terminal = new FakeTerminal(windowHeight: 30, windowWidth: 33)
             .Press(ConsoleKey.A, ConsoleKey.C, ConsoleKey.Enter);
 
-        new SkillPicker(terminal).Choose(items, Title);
+        new SkillPicker(terminal).Choose(items, Title, PickerMode.Uninstall);
 
-        Assert.Equal([16, 17, 16], terminal.CursorTopsAwaitingKey);
+        var tops = terminal.CursorTopsAwaitingKey;
+        Assert.Equal([tops[0], tops[0] + 1, tops[0]], tops);
         Assert.All(terminal.Frames, frame => Assert.Equal(FrameSkillNames(terminal.Frames[0]), FrameSkillNames(frame)));
-        Assert.Equal(Enumerable.Range(1, 4).Select(number => $"skill-{number:00}"), FrameSkillNames(terminal.Frames[0]));
-        Assert.Contains("100 of 100 selected; 100 to install;", terminal.Frames[1]);
-        Assert.Contains("0 of 100 selected; 0 to install; 0 to remove", terminal.Frames[2]);
-        Assert.True(string.IsNullOrWhiteSpace(terminal.Frames[2].Split(Environment.NewLine)[16]));
+        Assert.Contains("100 of 100 selected; 100 to", terminal.Frames[1]);
+        Assert.Contains("0 of 100 selected; 0 to remove", terminal.Frames[2]);
+        Assert.True(string.IsNullOrWhiteSpace(terminal.Frames[2].Split(Environment.NewLine)[tops[0]]));
         AssertWithinWindow(terminal);
     }
 
@@ -1435,7 +1431,7 @@ public class SkillPickerTests
         var description = string.Join("\n", Enumerable.Range(1, 60).Select(line => $"detail-{line:00}"));
 
         var chosen = new SkillPicker(terminal).Choose(
-            [new SkillPickerItem("alpha", "Pkg", "1", false, description)], Title);
+            [new SkillPickerItem("alpha", "Pkg", "1", description)], Title);
 
         Assert.Equal("alpha", Assert.Single(chosen!));
         Assert.Equal(terminal.Frames[0], terminal.Frames[3]);
@@ -1538,7 +1534,7 @@ public class SkillPickerTests
         terminal.Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
 
         var selected = new SkillPicker(terminal).Choose(
-            [new SkillPickerItem("longer-skill", "P", "1", false,
+            [new SkillPickerItem("longer-skill", "P", "1",
                 "One two three four five six seven eight nine ten.")], Title);
 
         var lines = terminal.Frames[0].Split(Environment.NewLine).Select(line => line.TrimEnd()).ToArray();
@@ -1576,7 +1572,7 @@ public class SkillPickerTests
                 Assert.Contains("(Press <space> to select, <enter> to accept)", terminal.Screen);
             }
         };
-        var items = Items(24, installed: uninstall ? Enumerable.Range(1, 24).ToArray() : []);
+        var items = Items(24);
 
         var chosen = new SkillPicker(terminal).Choose(items, Title,
             uninstall ? PickerMode.Uninstall : PickerMode.Install);
@@ -1604,9 +1600,9 @@ public class SkillPickerTests
     {
         var terminal = new FakeTerminal().WaitWithoutKey(times: 3).Press(ConsoleKey.Enter);
 
-        var chosen = new SkillPicker(terminal).Choose(Items(3, installed: [2]), Title);
+        var chosen = new SkillPicker(terminal).Choose(Items(3), Title);
 
-        Assert.Equal("skill-02", Assert.Single(chosen!));
+        Assert.Empty(chosen!);
         Assert.Equal(4, terminal.InputTimeouts.Count);
         Assert.All(terminal.InputTimeouts, timeout => Assert.Equal(TimeSpan.FromMilliseconds(100), timeout));
         Assert.All(terminal.Frames, frame => Assert.Equal(terminal.Frames[0], frame));
@@ -1679,11 +1675,11 @@ public class SkillPickerTests
         var terminal = new FakeTerminal(windowHeight: 24, windowWidth: 80)
             .ResizeBeforeKey(exit, windowHeight: 18, windowWidth: 46);
 
-        var chosen = new SkillPicker(terminal).Choose(Items(4, installed: [2]), Title);
+        var chosen = new SkillPicker(terminal).Choose(Items(4), Title);
 
         if (exit == ConsoleKey.Enter)
         {
-            Assert.Equal("skill-02", Assert.Single(chosen!));
+            Assert.Empty(chosen!);
         }
         else
         {
@@ -2001,7 +1997,7 @@ public class SkillPickerTests
         const string ExpectedSpan = " - Café, 測試, 🧪, Cafe\u0301. UNICODE-END";
 
         var chosen = new SkillPicker(terminal).Choose(
-            [new SkillPickerItem("alpha", "Pkg", "1", uninstall, Description)], Title,
+            [new SkillPickerItem("alpha", "Pkg", "1", Description)], Title,
             uninstall ? PickerMode.Uninstall : PickerMode.Install);
 
         Assert.Equal("alpha", Assert.Single(chosen!));
@@ -2063,9 +2059,9 @@ public class SkillPickerTests
 
         var chosen = new SkillPicker(terminal).Choose(
             [
-                new SkillPickerItem("猫", "P", "1", false, "First."),
-                new SkillPickerItem("ab", "P", "1", false, "Second."),
-                new SkillPickerItem("👩🏽‍💻", "P", "1", false, "Third."),
+                new SkillPickerItem("猫", "P", "1", "First."),
+                new SkillPickerItem("ab", "P", "1", "Second."),
+                new SkillPickerItem("👩🏽‍💻", "P", "1", "Third."),
             ],
             Title);
 
@@ -2087,7 +2083,7 @@ public class SkillPickerTests
         var description = string.Concat(Enumerable.Repeat("界e\u0301👩🏽‍💻", 12));
 
         new SkillPicker(terminal).Choose(
-            [new SkillPickerItem("alpha", "Pkg", "1.2.3", false, description)], Title);
+            [new SkillPickerItem("alpha", "Pkg", "1.2.3", description)], Title);
 
         var indent = new string(' ', 6);
         var rendered = terminal.FrameWrites[0]
@@ -2108,7 +2104,7 @@ public class SkillPickerTests
         const string Name = "unsafe\x1b[2Jskill\r\nname\u202e";
         var terminal = new FakeTerminal(windowHeight: 24, windowWidth: 120)
             .Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
-        var item = new SkillPickerItem(Name, "P\a", "\u009b2J1", false,
+        var item = new SkillPickerItem(Name, "P\a", "\u009b2J1",
             "\x1b]8;;malicious\aVisible\x1b]8;;\x1b\\\nrow\tend\u202e\0");
 
         var chosen = new SkillPicker(terminal).Choose(
@@ -2129,7 +2125,7 @@ public class SkillPickerTests
     public void Unicode_name_clipping_keeps_whole_graphemes_and_is_not_a_fixed_width_cap()
     {
         var name = string.Concat(Enumerable.Repeat("👩🏽‍💻e\u0301界", 16));
-        var item = new SkillPickerItem(name, "P", "1", false, "Short.");
+        var item = new SkillPickerItem(name, "P", "1", "Short.");
         var narrow = new FakeTerminal(windowHeight: 24, windowWidth: 46).Press(ConsoleKey.Enter);
         var wide = new FakeTerminal(windowHeight: 24, windowWidth: 240).Press(ConsoleKey.Enter);
 
@@ -2175,13 +2171,9 @@ public class SkillPickerTests
         }
     }
 
-    private static IReadOnlyList<SkillPickerItem> Items(int count, params int[] installed) =>
+    private static IReadOnlyList<SkillPickerItem> Items(int count) =>
     [
         .. Enumerable.Range(1, count).Select(number =>
-        {
-            var name = $"skill-{number:00}";
-
-            return new SkillPickerItem(name, $"Package.{number}", "1.0.0", installed.Contains(number));
-        }),
+            new SkillPickerItem($"skill-{number:00}", $"Package.{number}", "1.0.0")),
     ];
 }

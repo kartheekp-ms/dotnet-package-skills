@@ -75,12 +75,18 @@ public sealed partial record PackageCoordinate(string Id, string Version)
 
     internal static void ValidateId(string id)
     {
-        if (!PackageIdPattern().IsMatch(id))
+        if (!IsValidId(id))
         {
             throw new PackageSkillsException(
-                $"'{id}' is not a valid package id. Ids contain only letters, digits, '.', '_' and '-'.");
+                $"'{id}' is not a valid package id. Ids are letters, digits and '_', joined by single '.' or '-' characters.");
         }
     }
+
+    /// <summary>
+    /// NuGet's own rule for package ids, so any id that restore accepts is accepted here too,
+    /// including letters outside ASCII.
+    /// </summary>
+    internal static bool IsValidId(string id) => PackageIdPattern().IsMatch(id);
 
     /// <summary>Wildcards and NuGet interval notation: <c>4.*</c>, <c>[1.0,2.0)</c>, <c>(,3.0]</c>.</summary>
     private static readonly char[] RangeCharacters = ['*', '[', ']', '(', ')', ','];
@@ -89,7 +95,8 @@ public sealed partial record PackageCoordinate(string Id, string Version)
 
     public override string ToString() => $"{Id}{Separator}{Version}";
 
-    [GeneratedRegex(@"^[A-Za-z0-9_]([A-Za-z0-9._-]*[A-Za-z0-9_])?$")]
+    // NuGet's PackageIdValidator pattern, with \z so a trailing newline can't end a match.
+    [GeneratedRegex(@"^\w+([.-]\w+)*\z", RegexOptions.CultureInvariant)]
     private static partial Regex PackageIdPattern();
 
     [GeneratedRegex(@"^\d+(\.\d+){0,3}(-[0-9A-Za-z][0-9A-Za-z.-]*)?(\+[0-9A-Za-z][0-9A-Za-z.-]*)?$")]

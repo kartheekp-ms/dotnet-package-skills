@@ -52,14 +52,46 @@ public class OutputLayoutTests
                 ],
             },
             copied: true));
-        yield return ("install with unextracted packages", Render(
-            Result() with { Skills = [], SkillsDiscovered = 0, NotOnDisk = ["Ghost 9.9.9"] },
+        yield return ("install with unreferenced skills", Render(
+            Result() with { Unreferenced = [new TrackedSkill("left.package", "3.0.0", "left-skill")] },
+            copied: true));
+        yield return ("install with every section", Render(
+            Result() with
+            {
+                Removed = [new TrackedSkill("old.package", "1.0.0", "old-skill")],
+                Unreferenced =
+                [
+                    new TrackedSkill("left.package", "3.0.0", "left-skill"),
+                    new TrackedSkill("gone.package", "1.0.0", "gone-skill"),
+                ],
+                Skipped =
+                [
+                    new SkippedSkill("shared", "Beta", "2.0.0", "shared", "conflicts with Alpha 1.0.0"),
+                ],
+            },
+            copied: true));
+        yield return ("interactive install with nothing new", Render(
+            Result() with { Skills = [], NothingNewToInstall = true }, copied: true));
+        yield return ("interactive install with nothing new and collisions", Render(
+            Result() with
+            {
+                Skills = [],
+                NothingNewToInstall = true,
+                Skipped =
+                [
+                    new SkippedSkill("shared", "Beta", "2.0.0", "shared", "conflicts with Alpha 1.0.0"),
+                ],
+            },
             copied: true));
         yield return ("uninstall", RenderUninstall(
             [new TrackedSkill("Contoso.Widgets", "2.3.0", "contoso.widgets-usage")], dryRun: false));
         yield return ("uninstall dry run", RenderUninstall(
             [new TrackedSkill("Contoso.Widgets", "2.3.0", "contoso.widgets-usage")], dryRun: true));
         yield return ("uninstall nothing to do", RenderUninstall([], dryRun: false));
+        yield return ("uninstall stale", RenderUninstall(
+            [new TrackedSkill("contoso.widgets", "2.3.0", "contoso.widgets-usage")], dryRun: false,
+            target: @"C:\repo\App.slnx"));
+        yield return ("uninstall stale nothing to do", RenderUninstall([], dryRun: false, target: @"C:\repo\App.slnx"));
         yield return ("cancelled", RenderCancelled());
     }
 
@@ -140,10 +172,10 @@ public class OutputLayoutTests
         return output.ToString();
     }
 
-    private static string RenderUninstall(IReadOnlyList<TrackedSkill> removed, bool dryRun)
+    private static string RenderUninstall(IReadOnlyList<TrackedSkill> removed, bool dryRun, string? target = null)
     {
         using var output = new StringWriter();
-        new OutputWriter(output).WriteUninstallReport(removed, @"C:\repo\.agents\skills", dryRun);
+        new OutputWriter(output).WriteUninstallReport(removed, @"C:\repo\.agents\skills", dryRun, target);
         return output.ToString();
     }
 

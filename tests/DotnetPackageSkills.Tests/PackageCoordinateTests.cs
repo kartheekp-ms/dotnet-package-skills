@@ -14,6 +14,7 @@ public class PackageCoordinateTests
     [InlineData("Widgets@1.2.3.4", "Widgets", "1.2.3.4")]
     [InlineData("Widgets@1.2.3+sha.abc", "Widgets", "1.2.3+sha.abc")]
     [InlineData("  Mockly@1.10.0  ", "Mockly", "1.10.0")]
+    [InlineData("Contoso.Überlib@1.0.0", "Contoso.Überlib", "1.0.0")]
     public void Parse_accepts_an_exact_package_and_version(string input, string id, string version)
     {
         var coordinate = PackageCoordinate.Parse(input);
@@ -57,6 +58,9 @@ public class PackageCoordinateTests
     [InlineData("Mockly@v1.0.0")]
     [InlineData("../evil@1.0.0")]
     [InlineData("path/to/thing@1.0.0")]
+    [InlineData("Contoso..Widgets@1.0.0")]
+    [InlineData("Contoso.-Widgets@1.0.0")]
+    [InlineData("Contoso\u200B.Widgets@1.0.0")]
     public void Parse_rejects_malformed_input(string input) =>
         Assert.Throws<PackageSkillsException>(() => PackageCoordinate.Parse(input));
 
