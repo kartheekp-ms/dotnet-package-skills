@@ -41,10 +41,9 @@ The examples use these packages:
 | `-d, --destination <PATH>` | Yes | Yes | Yes | The skills folder. |
 | `-i, --interactive` | | Yes | Yes | Choose skills from a paged checklist. |
 | `--dry-run` | | Yes | Yes | Show what would happen; change nothing. |
-| `--no-restore` | Yes | Yes | With `--stale` | Don't run `dotnet restore` when the project isn't restored. |
 | `--global-packages <PATH>` | Yes | Yes | | Read a different NuGet cache. |
 
-**Changed in v1:** the `--json` option is removed from every command. Each command reports its results as text only.
+**Changed in v1:** the `--json` option is removed from every command. Each command reports its results as text only. The `--no-restore` option is removed too: the tool never restores (F3).
 
 Only a project's direct package references are read. Repositories are expected to manage package versions with [Central Package Management](https://learn.microsoft.com/nuget/consume-packages/central-package-management), so that each package resolves to one version. `uninstall` needs neither a project nor the NuGet cache, except that `uninstall --stale` reads the project's package references. It never reads the packages themselves.
 
@@ -137,9 +136,9 @@ Skipped skills don't fail the command; it still exits with code 0. With `install
 
 | # | Situation | You run | What happens |
 | --- | --- | --- | --- |
-| F1 | A package that the project references isn't in the NuGet cache, for example after the cache was cleaned and `--no-restore` was used. | `install` or `install -i`, including with `--dry-run` | Stops with exit code 1, changes nothing, and asks you to run `dotnet restore`. |
+| F1 | A package that the project references isn't in the NuGet cache that the tool reads, for example because `--global-packages` names a different folder than the one restore uses. | `install` or `install -i`, including with `--dry-run` | Stops with exit code 1, changes nothing, and asks you to run `dotnet restore`. |
 | F2 | A package isn't in the NuGet cache. | `list`, `install --package`, or `install -i --package` | The package is treated like one without skills, with no warning. A version that isn't in the cache never causes a removal: with `install --package Mockly@1.11.0` and 1.11.0 missing, Mockly's installed skills stay as they are. **Changed in v1:** the preview build warned that the package was "resolved but not extracted" and listed it in the JSON `notOnDisk` field. |
-| F3 | `dotnet restore` fails. | `install`, `list`, or `uninstall --stale` | Stops with restore's error. |
+| F3 | `dotnet list package` fails: the restore that the .NET 10 SDK runs for it fails, or an earlier SDK says the project needs restoring. | `install`, `list`, or `uninstall --stale` | Stops with exit code 1, changes nothing, and shows what `dotnet list package` reported. Restore or fix the project, and then run the command again. The tool never restores. **Changed in v1:** the preview build ran `dotnet restore` itself when the project wasn't restored, and had a `--no-restore` option to prevent that. |
 | F4 | Packages are missing from the NuGet cache. | `uninstall --stale` | Not affected, because it reads only the project's package references. |
 
 ### G. Removing skills
@@ -273,7 +272,7 @@ The manifest is the only file the tool writes besides the copied skills, and its
 | 14 | Package IDs keep NuGet's casing when they come from packages, and are lowercase when they come from the manifest, as in the `uninstall` report and the stale hint. |
 | 15 | A version that isn't in the NuGet cache never causes a removal. |
 | 16 | `install -i --package X@V` stops when X is installed at another version, and asks you to run `uninstall --package X` first. |
-| 17 | `uninstall --stale` can't be combined with `--package`, and `uninstall` accepts `--target` and `--no-restore` only together with `--stale`. |
+| 17 | `uninstall --stale` can't be combined with `--package`, and `uninstall` accepts `--target` only together with `--stale`. |
 | 18 | `uninstall --stale` still runs when a package resolves to two versions. A skill counts as stale only if the project doesn't reference its installed version at all. |
 | 19 | `uninstall --stale --dry-run` is the way to see stale skills; there's no machine-readable list of them. |
 | 20 | When nothing new is available, `install -i` says so and exits with code 0. |
@@ -282,6 +281,7 @@ The manifest is the only file the tool writes besides the copied skills, and its
 | 23 | The commands that reports and errors suggest repeat the `--target` and `--destination` of the command that was run, so they can be run as printed. |
 | 24 | Package IDs follow NuGet's own rule, which allows letters outside ASCII, on the command line and in the manifest. The tool never writes a manifest that it would refuse to read. |
 | 25 | Both checklists draw a checked skill the same way, with a blue X, because each does only one thing: the title and the summary say whether a check installs or removes. There's no separate removal cue, and without color, `[X]` alone marks a checked skill. |
+| 26 | The tool never restores, and there's no `--no-restore` option. It runs `dotnet list package` as it is; the .NET 10 SDK restores during that when it needs to. When `dotnet list package` fails, the tool shows what it reported, and the customer restores or fixes the project and runs the command again. |
 
 Known consequence: skills added with `install --package` for packages outside the project count as stale for project commands, so a project `install -i` stops until they're removed.
 

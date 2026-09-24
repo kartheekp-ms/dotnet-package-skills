@@ -1013,7 +1013,7 @@ public class SkillInstallServiceTests
         var runner = new FakeDotnet(temp.Combine("packages"), Json(("Mockly", "1.11.0"), ("Alpha", "1.0.0")));
         var service = new SkillInstallService(runner);
 
-        var references = service.ReadReferences(target: null, temp.Path, allowRestore: true);
+        var references = service.ReadReferences(target: null, temp.Path);
         var removed = service.Uninstall(
             ".agents/skills", temp.Path, packageId: null, packageVersion: null, dryRun, staleAgainst: references.Packages);
 
@@ -1050,7 +1050,7 @@ public class SkillInstallServiceTests
         var service = new SkillInstallService(new FakeDotnet(
             temp.Combine("packages"), Json(("Mockly", "1.10.0"), ("Mockly", "1.11.0"))));
 
-        var references = service.ReadReferences(target: null, temp.Path, allowRestore: true);
+        var references = service.ReadReferences(target: null, temp.Path);
         var removed = service.Uninstall(
             ".agents/skills", temp.Path, null, null, dryRun: false, staleAgainst: references.Packages);
 
@@ -1065,7 +1065,7 @@ public class SkillInstallServiceTests
         var service = new SkillInstallService(new FakeDotnet(temp.Combine("packages"), Json()));
 
         var error = Assert.Throws<PackageSkillsException>(() =>
-            service.ReadReferences(target: null, temp.Path, allowRestore: true));
+            service.ReadReferences(target: null, temp.Path));
 
         Assert.Contains("--target", error.Message);
     }

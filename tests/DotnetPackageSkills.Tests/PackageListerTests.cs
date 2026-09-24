@@ -14,61 +14,61 @@ public class PackageListerTests
         public ProcessResult Run(string fileName, IReadOnlyList<string> arguments, string? workingDirectory = null)
         {
             Invocations.Add(string.Join(' ', arguments));
-
-            return arguments.Contains("restore")
-                ? new ProcessResult(0, "Restore succeeded.", string.Empty)
-                : new ProcessResult(exitCode, standardOutput, standardError);
+            return new ProcessResult(exitCode, standardOutput, standardError);
         }
     }
 
     private const string UnrestoredError =
         "No assets file was found for 'App.csproj'. Run restore before running this command.";
 
+    /// <summary>What the .NET 10 SDK writes when its own restore fails during a JSON listing.</summary>
+    private const string RestoreFailedJson = """
+        {
+          "version": 1,
+          "problems": [
+            { "text": "Restore failed. Run `dotnet restore` for more details on the issue.", "level": "error" }
+          ]
+        }
+        """;
+
     [Fact]
-    public void List_passes_no_restore_through_to_the_cli()
+    public void List_runs_dotnet_list_package_without_a_restore_option()
     {
-        // `dotnet list package` restores by itself, so not forwarding this would let a
-        // --no-restore run quietly restore anyway.
+        // Whether listing restores is the SDK's call: .NET 10 restores when it needs to, and
+        // earlier SDKs say that the target has to be restored first.
         var runner = new RecordingRunner(0, TwoProjectsJson);
 
-        new PackageLister(new DotnetCli(runner)).List("App.csproj", allowRestore: false);
+        new PackageLister(new DotnetCli(runner)).List("App.csproj");
 
-        Assert.Contains("--no-restore", Assert.Single(runner.Invocations));
+        Assert.Equal("list App.csproj package --format json", Assert.Single(runner.Invocations));
     }
 
     [Fact]
-    public void List_does_not_pass_no_restore_when_restoring_is_allowed()
+    public void An_unrestored_target_is_reported_with_the_sdk_output_and_the_tool_never_restores_it()
     {
-        var runner = new RecordingRunner(0, TwoProjectsJson);
-
-        new PackageLister(new DotnetCli(runner)).List("App.csproj", allowRestore: true);
-
-        Assert.DoesNotContain("--no-restore", Assert.Single(runner.Invocations));
-    }
-
-    [Fact]
-    public void List_refuses_to_restore_an_unrestored_target_when_told_not_to()
-    {
+        // The customer restores and runs the command again; the tool doesn't restore for them.
         var runner = new RecordingRunner(1, string.Empty, UnrestoredError);
 
         var error = Assert.Throws<PackageSkillsException>(
-            () => new PackageLister(new DotnetCli(runner)).List("App.csproj", allowRestore: false));
+            () => new PackageLister(new DotnetCli(runner)).List("App.csproj"));
 
-        Assert.Contains("has not been restored", error.Message);
-        Assert.Contains("dotnet restore", error.Message);
-        Assert.DoesNotContain(runner.Invocations, line => line.StartsWith("restore", StringComparison.Ordinal));
+        Assert.Contains("'dotnet list \"App.csproj\" package' failed with exit code 1", error.Message);
+        Assert.Contains(UnrestoredError, error.Message);
+        Assert.Contains("and then run this command again", error.Message);
+        Assert.Equal("list App.csproj package --format json", Assert.Single(runner.Invocations));
     }
 
     [Fact]
-    public void List_restores_an_unrestored_target_when_allowed_to()
+    public void Problems_that_the_sdk_reports_in_json_are_shown_as_text()
     {
-        var runner = new RecordingRunner(1, string.Empty, UnrestoredError);
+        var runner = new RecordingRunner(1, RestoreFailedJson);
 
-        // The canned result never turns green, so this also proves it stops rather than looping.
-        Assert.Throws<PackageSkillsException>(
-            () => new PackageLister(new DotnetCli(runner)).List("App.csproj", allowRestore: true));
+        var error = Assert.Throws<PackageSkillsException>(
+            () => new PackageLister(new DotnetCli(runner)).List("App.csproj"));
 
-        Assert.Contains(runner.Invocations, line => line.StartsWith("restore", StringComparison.Ordinal));
+        Assert.Contains("error: Restore failed. Run `dotnet restore` for more details on the issue.", error.Message);
+        Assert.DoesNotContain("\"problems\"", error.Message);
+        Assert.Single(runner.Invocations);
     }
 
     private const string TwoProjectsJson = """

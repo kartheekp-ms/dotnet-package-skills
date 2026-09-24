@@ -56,11 +56,6 @@ namespace DotnetPackageSkills.Cli
                 DefaultValueFactory = _ => DefaultDestination,
             };
 
-            var noRestore = new Option<bool>("--no-restore")
-            {
-                Description = "Fail instead of restoring when the target has not been restored yet.",
-            };
-
             var globalPackages = new Option<string?>("--global-packages")
             {
                 Description = "Override the NuGet global packages folder instead of asking the CLI.",
@@ -120,7 +115,7 @@ namespace DotnetPackageSkills.Cli
 
             var install = new Command("install", "Copy skills bundled in NuGet packages into the repository.")
             {
-                target, package, destination, noRestore, globalPackages, dryRun, interactive,
+                target, package, destination, globalPackages, dryRun, interactive,
             };
             install.Validators.Add(RejectTargetWithPackage);
             install.SetAction(parseResult => Run(() =>
@@ -143,7 +138,7 @@ namespace DotnetPackageSkills.Cli
 
             var list = new Command("list", "Show which packages ship skills, without copying anything.")
             {
-                target, package, destination, noRestore, globalPackages,
+                target, package, destination, globalPackages,
             };
             list.Validators.Add(RejectTargetWithPackage);
             list.SetAction(parseResult => Run(() =>
@@ -176,14 +171,9 @@ namespace DotnetPackageSkills.Cli
                 HelpName = "PATH",
             };
 
-            var staleNoRestore = new Option<bool>("--no-restore")
-            {
-                Description = "With --stale, fail instead of restoring when the target has not been restored yet.",
-            };
-
             var uninstall = new Command("uninstall", "Remove skills this tool previously copied in.")
             {
-                uninstallDestination, uninstallPackage, stale, staleTarget, staleNoRestore, dryRun, uninstallInteractive,
+                uninstallDestination, uninstallPackage, stale, staleTarget, dryRun, uninstallInteractive,
             };
             uninstall.Validators.Add(result =>
             {
@@ -196,10 +186,9 @@ namespace DotnetPackageSkills.Cli
                         "match the target; --package removes one package's skills.");
                 }
 
-                if (!isStale && (result.GetResult(staleTarget) is not null || result.GetResult(staleNoRestore) is not null))
+                if (!isStale && result.GetResult(staleTarget) is not null)
                 {
-                    result.AddError(
-                        "--target and --no-restore can be used with uninstall only together with --stale.");
+                    result.AddError("--target can be used with uninstall only together with --stale.");
                 }
             });
             uninstall.SetAction(parseResult => Run(() =>
@@ -211,8 +200,7 @@ namespace DotnetPackageSkills.Cli
                 var root = Path.GetFullPath(destinationValue, workingDirectory);
                 var service = new SkillInstallService(new ProcessRunner());
                 var references = parseResult.GetValue(stale)
-                    ? service.ReadReferences(
-                        parseResult.GetValue(staleTarget), workingDirectory, !parseResult.GetValue(staleNoRestore))
+                    ? service.ReadReferences(parseResult.GetValue(staleTarget), workingDirectory)
                     : null;
 
                 UninstallChoice? choice = null;
@@ -250,7 +238,6 @@ namespace DotnetPackageSkills.Cli
                 Packages = [.. (parseResult.GetValue(package) ?? []).Select(PackageCoordinate.Parse)],
                 Destination = parseResult.GetValue(destination) ?? DefaultDestination,
                 WorkingDirectory = Directory.GetCurrentDirectory(),
-                AllowRestore = !parseResult.GetValue(noRestore),
                 GlobalPackagesOverride = parseResult.GetValue(globalPackages),
                 DryRun = parseResult.GetValue(dryRun),
             };

@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import queue
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -294,12 +295,12 @@ class PickerRegression(unittest.TestCase):
         if verb != "uninstall":
             args += ["--global-packages", str(self.cache)]
             if self.target is not None:
-                args += ["--target", str(self.target), "--no-restore"]
+                args += ["--target", str(self.target)]
             else:
                 for package in packages or ["Demo.Alpha@1.0.0", "Demo.Beta@2.0.0"]:
                     args += ["--package", package]
         elif "--stale" in extra and self.target is not None:
-            args += ["--target", str(self.target), "--no-restore"]
+            args += ["--target", str(self.target)]
         return args + list(extra)
 
     def cli(self, verb, *extra, packages=None, expected=0):
@@ -573,6 +574,11 @@ class PickerRegression(unittest.TestCase):
         self.prepare_project()
         self.cli("install")
         before = snapshot(self.destination)
+        # dotnet list package restores into NUGET_PACKAGES, which stays complete. The tool reads
+        # the folder that --global-packages names, which lacks a package, as a fallback folder can.
+        partial = self.root / "partial cache"
+        shutil.copytree(self.cache, partial)
+        self.cache = partial
         (self.cache / "demo.beta").rename(self.cache / "demo.beta-moved-aside")
         available = self.cache / "demo.alpha" / "1.0.0" / "skills" / "alpha-01" / "SKILL.md"
         available.write_text("---\ndescription: Must not be copied during incomplete discovery.\n---\n", encoding="utf-8")
@@ -592,6 +598,26 @@ class PickerRegression(unittest.TestCase):
         result = self.cli("install", "-i", expected=1)
         self.assertIn("resolved packages are missing", result.stderr)
         self.assertEqual(before, snapshot(self.destination))
+
+    def test_a_target_that_cannot_be_restored_is_reported_and_nothing_changes(self):
+        project_file, project_xml, _, _ = self.prepare_project()
+        self.cli("install")
+        before = snapshot(self.destination)
+        # The local feed has no 9.9.9, so the restore that dotnet list package runs fails. The
+        # tool reports what the SDK said and leaves restoring to the customer.
+        project_file.write_text(project_xml.replace('Version="2.0.0"', 'Version="9.9.9"'), encoding="utf-8")
+        for verb, flags in (
+            ("install", []), ("install", ["--dry-run"]), ("install", ["-i"]),
+            ("list", []), ("uninstall", ["--stale"]),
+        ):
+            with self.subTest(verb=verb, flags=flags):
+                result = self.cli(verb, *flags, expected=1)
+                self.assertIn("package' failed with exit code", result.stderr)
+                self.assertIn("Restore failed", result.stderr)
+                self.assertIn("and then run this command again", result.stderr)
+                self.assertNotIn('"problems"', result.stderr)
+                self.assertEqual("", result.stdout)
+                self.assertEqual(before, snapshot(self.destination))
 
     def add_shared_skills(self):
         for package, version in (("demo.alpha", "1.0.0"), ("demo.beta", "2.0.0")):

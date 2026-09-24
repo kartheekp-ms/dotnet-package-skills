@@ -87,7 +87,7 @@ Found 4 skills:
   fabrikam.testing-fixtures (Fabrikam.Testing 1.4.0)
 ```
 
-`list` shows what is available from packages, not an inventory of installed skills. It never copies skills or writes the ownership manifest. It can trigger project restore when necessary; add `--no-restore` to prohibit that.
+`list` shows what is available from packages, not an inventory of installed skills. It never copies skills or writes the ownership manifest. The tool never restores: the .NET 10 SDK restores the target during `dotnet list package` when it needs to, and earlier SDKs report that it has to be restored first. When `dotnet list package` fails, every command that reads packages stops without changes and shows what it reported, so the user can restore or fix the target and run the command again.
 
 Other ways to scope discovery:
 
@@ -99,7 +99,7 @@ dotnet-package-skills list --package Contoso.Widgets@2.3.0
 
 An explicit package must already be extracted in the selected NuGet cache. Naming it does not download it or add it to a project. Such reports use `Target: (packages named on the command line)` and `Scanned N packages (named explicitly)`.
 
-The cache directory itself must already exist before automatic project restore can be attempted. If it is absent, restore the project first. `list` skips packages that aren't extracted in the selected cache, without reporting them. When projects resolve different versions of one package, `list` shows each version; `install` refuses to proceed until they're aligned (section 4). `list` does not read destination ownership, so its first discovery candidate can differ from the owner-preferred candidate used by `install`.
+The cache directory itself must already exist. If it is absent, restore the project first. `list` skips packages that aren't extracted in the selected cache, without reporting them. When projects resolve different versions of one package, `list` shows each version; `install` refuses to proceed until they're aligned (section 4). `list` does not read destination ownership, so its first discovery candidate can differ from the owner-preferred candidate used by `install`.
 
 ## 4. Install or refresh skills: `install`
 
@@ -165,7 +165,7 @@ Equivalent versions, such as `1.10` and `1.10.0`, count as one. `list` still sho
 ### Preview without installing
 
 ```powershell
-dotnet-package-skills install --dry-run --no-restore
+dotnet-package-skills install --dry-run
 ```
 
 Result excerpt:
@@ -178,14 +178,14 @@ Would copy 4 skills:
   fabrikam.testing-fixtures (Fabrikam.Testing 1.4.0)
 ```
 
-Any planned removals appear under `Would remove`. A dry run does not copy or delete skills or create/update the ownership manifest. It does not, by itself, prohibit project restore; that is what `--no-restore` controls.
+Any planned removals appear under `Would remove`. A dry run does not copy or delete skills or create/update the ownership manifest. The .NET SDK can still restore the target while `dotnet list package` runs.
 
 ## 5. Choose skills interactively
 
 ```powershell
 dotnet-package-skills install --interactive
 dotnet-package-skills install --package Contoso.Widgets@2.3.0 -i
-dotnet-package-skills install -i --dry-run --no-restore
+dotnet-package-skills install -i --dry-run
 ```
 
 Representative page after making a selection, with `contoso.widgets-widget-testing` already installed:
@@ -358,11 +358,11 @@ Destination: C:\src\MyApp\.agents\skills
 Nothing to remove. No stale skills were found.
 ```
 
-- `--stale` reads the target's package references, so it requires a solution or project, found as in section 3 or named with `--target`. Without one, it fails with `No solution or project found under ...`. It can restore the target; `--no-restore` prohibits that.
+- `--stale` reads the target's package references, so it requires a solution or project, found as in section 3 or named with `--target`. Without one, it fails with `No solution or project found under ...`. Like `install` and `list`, it runs `dotnet list package`, which the .NET SDK can restore the target for; when that fails, the command stops and shows what it reported.
 - It needs only the target's package references, not the packages, so it doesn't look in the NuGet cache for skills.
 - It works when the target resolves more than one version of a package: a skill is stale only if no project references its installed version.
 - With `--interactive`, only stale skills are listed, under the note `Only skills that don't match the target are listed.`
-- `--stale` cannot be combined with `--package`. `--target` and `--no-restore` are accepted by `uninstall` only together with `--stale`.
+- `--stale` cannot be combined with `--package`. `--target` is accepted by `uninstall` only together with `--stale`.
 
 ## 7. Complete option reference
 
@@ -373,14 +373,13 @@ Nothing to remove. No stale skills were found.
 | `-p, --package <ID[@VERSION]>` | `uninstall` | One occurrence of a nonempty package filter, optionally restricted to a normalized version. Same matching in both modes. |
 | `-d, --destination <PATH>` | All three | Skills destination; default `.agents\skills`. Uninstall must use the same destination used for installation. |
 | `--global-packages <PATH>` | `list`, `install` | Existing extracted-package cache to use. Overrides `NUGET_PACKAGES` and the NuGet-configured cache. |
-| `--no-restore` | `list`, `install`; `uninstall` with `--stale` | Do not restore; fail when the target's resolved package list is unavailable. |
 | `--dry-run` | `install`, `uninstall` | Report planned destination changes without applying them. |
 | `-i, --interactive` | `install`, `uninstall` | Open the paginated picker. On install, only skills that aren't installed are listed, and accepting only adds. On uninstall, checked skills are removed. Requires a terminal when there are rows to choose. |
 | `--stale` | `uninstall` | Remove only stale skills: those whose package the target no longer references, or references at a different version. Requires a solution or project. |
 | `-?, -h, --help` | Root and all three | Display usage and supported options. |
 | `--version` | Root | Display version information. |
 
-**Combination rules:** `--target` cannot be combined with `--package`. `--stale` cannot be combined with `--package`, and `uninstall` accepts `--target` and `--no-restore` only with `--stale`. Interactive selection can be combined with `--dry-run`, package filters, and `--stale`. `list` has neither `--interactive` nor `--dry-run`. No command has a JSON output option; `--json` is rejected as an unrecognized argument.
+**Combination rules:** `--target` cannot be combined with `--package`. `--stale` cannot be combined with `--package`, and `uninstall` accepts `--target` only with `--stale`. Interactive selection can be combined with `--dry-run`, package filters, and `--stale`. `list` has neither `--interactive` nor `--dry-run`. No command has a JSON output option or a restore option; `--json` and `--no-restore` are rejected as unrecognized arguments.
 
 **Path rule:** a relative destination is based on the invocation directory, not automatically on the directory containing `--target`. A relative `--global-packages` override is resolved from the target's directory in target mode and the invocation directory in named-package mode. That override selects the read cache; it does not reconfigure NuGet restore.
 
@@ -441,6 +440,7 @@ Human-readable reports and diagnostics, including argument-validation errors and
 | The ownership manifest is unreadable, malformed, or unsafe | Fail before modifying destination skills; preserve the manifest and explain how to repair/restore it. Missing `version` or `packages`, duplicate JSON properties (including case variants), invalid package IDs, packages without a version, duplicate case-insensitive skill claims, and unsafe skill folder names are invalid. Names ending in a dot or space, including `...`, are rejected because Windows can resolve them to another folder or the destination itself. This also applies to interactive and dry-run modes. `list` remains available. |
 | The manifest has a newer format version | Fail before changes and ask the user to update the tool. |
 | The manifest was written by a pre-release build | Fail before changes and ask the user to move the skills folder aside and install again. |
+| `dotnet list package` fails, for example because the restore it runs fails, or an earlier SDK says the target needs restoring | Stop before changes with exit code `1`, show the problems it reported, and ask the user to resolve them and run the command again. The tool never restores. |
 | Invalid option combination, missing target, failed restore, or filesystem error | Report an actionable error and return a non-zero exit code. |
 
 The manifest is written after a successful installation or removal, not by `list`, a cancelled picker, or a dry run. Removing the last tracked entry deletes the manifest. The destination folder is deleted only if it is empty; hand-written skills keep that folder alive. Removing a tracking entry is reported even when its skill folder had already been deleted.
@@ -456,7 +456,7 @@ Skill metadata is not a security review of the instructions. Developers remain r
 | Scenario | Expected customer outcome |
 | --- | --- |
 | Discover before deciding | `list` shows available skills without installing them. |
-| Try the picker safely | `install -i --dry-run --no-restore` previews a selection without writing skills, a manifest, or restore artifacts. |
+| Try the picker safely | `install -i --dry-run` previews a selection without writing skills or a manifest. |
 | Make an informed choice | Read descriptions, navigate pages, select skills, and accept. |
 | Add a few more skills later | `install -i` lists only skills that aren't installed; accepting adds them and changes nothing else. With nothing new, it says so without a checklist. |
 | Resize during selection | Text reflows and selections are retained while the window remains large enough; the note under the title gives way first; an unusable size fails without changing files. |

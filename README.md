@@ -268,14 +268,12 @@ errors, not an unfiltered uninstall. `--stale` and `--package` can't be combined
 | `-p, --package <ID@VERSION>` | install, list | Take skills from an exact package instead of a project. Repeatable. No floating versions. |
 | `-d, --destination <PATH>` | install, list | Where skills are copied. Default `.agents/skills`. |
 | `-d, --destination <PATH>` | uninstall | Where to remove them from. Must match the one you installed to. |
-| `--no-restore` | install, list | Fail instead of restoring when the target has not been restored. |
 | `--global-packages <PATH>` | install, list | Override the NuGet global packages folder. |
 | `-i, --interactive` | install | Choose which new skills to add, with descriptions and pagination. Lists only skills that aren't installed. Combines with `--target` or `--package`. |
 | `-i, --interactive` | uninstall | Choose which installed skills to remove, with descriptions and pagination. Lists only what this tool installed. |
 | `-p, --package <ID[@VERSION]>` | uninstall | Remove only this package's skills — whichever version is installed, or only if it's the version you name. |
 | `--stale` | uninstall | Remove only stale skills: those whose package the target no longer references, or references at a different version. Needs a solution or project. Not with `--package`. |
 | `-t, --target <PATH>` | uninstall | With `--stale`, the solution or project to compare against. Defaults to searching the current directory. |
-| `--no-restore` | uninstall | With `--stale`, fail instead of restoring when the target has not been restored. |
 | `--dry-run` | install, uninstall | Report what would change without writing anything. |
 
 ### Targeting another agent's folder
@@ -443,7 +441,10 @@ warning rather than preventing installation.
 
 ## How it works
 
-1. `dotnet list <target> package --format json` — the resolved direct packages.
+1. `dotnet list <target> package --format json` — the resolved direct packages. The tool never
+   restores: the .NET 10 SDK restores during this step when it needs to, and earlier SDKs say the
+   target has to be restored first. If the step fails, the tool shows what it reported, so you can
+   restore or fix the target and run the tool again.
 2. `dotnet nuget locals global-packages --list` — where restore extracted them. `NUGET_PACKAGES`
    and `--global-packages` take precedence, in that order.
 3. `install` stops without changing anything if a package resolves to more than one version, or
@@ -502,6 +503,11 @@ the way you would treat any new dependency.
 ## Troubleshooting
 
 **"No bundled skills found"** — the common and correct outcome; most packages do not ship skills.
+
+**"'dotnet list ... package' failed"** — the tool reads the target's packages with `dotnet list
+package` and shows what it reported, such as a restore that failed or a target that earlier SDKs
+say needs restoring. The tool never restores. Resolve what it reports, for example with
+`dotnet restore`, and run the tool again.
 
 **"resolved packages are missing from"** the NuGet cache — run `dotnet restore` for the target and
 try again. This also happens when packages come from a NuGet *fallback folder* (common in

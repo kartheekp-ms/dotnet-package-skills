@@ -18,17 +18,17 @@ ms.date: 09/24/2026
 
 ```dotnetcli
 dotnet-package-skills install [-d|--destination <PATH>] [--dry-run]
-    [--global-packages <PATH>] [-i|--interactive] [--no-restore]
+    [--global-packages <PATH>] [-i|--interactive]
     [-p|--package <ID@VERSION>...] [-t|--target <PATH>]
 
 dotnet-package-skills list [-d|--destination <PATH>] [--global-packages <PATH>]
-    [--no-restore] [-p|--package <ID@VERSION>...] [-t|--target <PATH>]
+    [-p|--package <ID@VERSION>...] [-t|--target <PATH>]
 
 dotnet-package-skills uninstall [-d|--destination <PATH>] [--dry-run]
     [-i|--interactive] [-p|--package <ID[@VERSION]>]
 
 dotnet-package-skills uninstall --stale [-d|--destination <PATH>] [--dry-run]
-    [-i|--interactive] [--no-restore] [-t|--target <PATH>]
+    [-i|--interactive] [-t|--target <PATH>]
 
 dotnet-package-skills [install|list|uninstall] -h|--help
 
@@ -64,7 +64,7 @@ Found 4 skills:
   fabrikam.testing-fixtures (Fabrikam.Testing 1.4.0)
 ```
 
-Reading the target's package list can restore the target. To prevent restore, use `--no-restore`. The NuGet global packages folder must already exist; if it doesn't, restore the target first. `list` skips packages that aren't extracted in the NuGet global packages folder.
+The tool doesn't restore. The .NET 10 SDK restores the target during `dotnet list package` when it needs to, and earlier SDKs report that the target has to be restored first. When `dotnet list package` fails, the command stops, changes nothing, and shows what it reported; restore or fix the target, and then run the command again. The NuGet global packages folder must already exist; if it doesn't, restore the target first. `list` skips packages that aren't extracted in the NuGet global packages folder.
 
 Packages named with `--package` must already be extracted in the NuGet global packages folder. Naming a package doesn't download it or add it to a project. These reports show `Target: (packages named on the command line)` and `Scanned N packages (named explicitly).`
 
@@ -126,7 +126,7 @@ Would copy 4 skills:
   fabrikam.testing-fixtures (Fabrikam.Testing 1.4.0)
 ```
 
-Planned removals appear under `Would remove`. A dry run doesn't copy or delete skills or create or update the manifest. It doesn't prevent restore; use `--no-restore` for that.
+Planned removals appear under `Would remove`. A dry run doesn't copy or delete skills or create or update the manifest. The .NET SDK can still restore the target while `dotnet list package` runs.
 
 ### Choose skills interactively
 
@@ -136,13 +136,9 @@ With `--interactive`, `install` and `uninstall` open a paged checklist. The inst
 Which skills should be installed? (MyApp.slnx)
 Installed skills aren't listed.
 
-> [X] contoso.widgets-widget-usage - Correct usage patterns for the
-      Contoso.Widgets library, including lifetime rules and the batching API.
-      Use whenever code creates, configures, or disposes a Widget.
-  [ ] fabrikam.testing-fakes - Create fakes and verify their calls in unit
-      tests.
-  [ ] fabrikam.testing-fixtures - Share expensive setup across tests with
-      fixtures.
+> [X] contoso.widgets-widget-usage - Correct usage patterns for the Contoso.Widgets library, including lifetime rules and the batching API. Use whenever code creates, configures, or disposes a Widget.
+  [ ] fabrikam.testing-fakes - Create fakes and verify their calls in unit tests.
+  [ ] fabrikam.testing-fixtures - Share expensive setup across tests with fixtures.
 
 1 of 3 selected
 (Press <space> to select, <enter> to accept)
@@ -212,12 +208,8 @@ The uninstall picker lists only tracked skills, and nothing starts checked. A ch
 ```output
 Which skills should be uninstalled?
 
-> [X] contoso.widgets-widget-testing - Testing patterns for code that uses
-      Contoso.Widgets. Use when writing unit or integration tests involving
-      widgets.
-  [ ] contoso.widgets-widget-usage - Correct usage patterns for the
-      Contoso.Widgets library, including lifetime rules and the batching API.
-      Use whenever code creates, configures, or disposes a Widget.
+> [X] contoso.widgets-widget-testing - Testing patterns for code that uses Contoso.Widgets. Use when writing unit or integration tests involving widgets.
+  [ ] contoso.widgets-widget-usage - Correct usage patterns for the Contoso.Widgets library, including lifetime rules and the batching API. Use whenever code creates, configures, or disposes a Widget.
 
 1 of 2 selected; 1 to remove
 (Press <space> to select, <enter> to accept)
@@ -262,10 +254,8 @@ Add `--dry-run` to preview, or `--interactive` to choose among the stale skills:
 Which skills should be uninstalled?
 Only skills that don't match the target are listed.
 
-> [X] fabrikam.testing-fakes - Create fakes and verify their calls in unit
-      tests.
-  [ ] fabrikam.testing-fixtures - Share expensive setup across tests with
-      fixtures.
+> [X] fabrikam.testing-fakes - Create fakes and verify their calls in unit tests.
+  [ ] fabrikam.testing-fixtures - Share expensive setup across tests with fixtures.
 
 1 of 2 selected; 1 to remove
 (Press <space> to select, <enter> to accept)
@@ -274,7 +264,7 @@ Only skills that don't match the target are listed.
 Blue X: selected
 ```
 
-`--stale` can't be combined with `--package`. `--target` and `--no-restore` are available for `uninstall` only together with `--stale`.
+`--stale` can't be combined with `--package`. `--target` is available for `uninstall` only together with `--stale`.
 
 ### Ownership manifest
 
@@ -336,7 +326,7 @@ Human-readable reports and diagnostics remove terminal escape sequences and othe
 
 - **`--dry-run`**
 
-  Reports the planned changes without copying or deleting skills or writing the manifest. It doesn't prevent restore; use `--no-restore` for that. Available for `install` and `uninstall`.
+  Reports the planned changes without copying or deleting skills or writing the manifest. The .NET SDK can still restore the target while `dotnet list package` runs. Available for `install` and `uninstall`.
 
 - **`--global-packages <PATH>`**
 
@@ -350,10 +340,6 @@ Human-readable reports and diagnostics remove terminal escape sequences and othe
 
   Opens a paged checklist for choosing skills. For `install`, only skills that aren't installed are listed, nothing starts checked, and accepting adds the checked skills without refreshing or removing anything. For `uninstall`, only tracked skills are listed (with `--stale`, only stale skills), nothing starts checked, and the checked skills are removed. Requires a terminal when there are skills to choose from. Can be combined with `--dry-run`, `--package`, and `--stale`. For more information, see [Choose skills interactively](#choose-skills-interactively). Available for `install` and `uninstall`.
 
-- **`--no-restore`**
-
-  Doesn't restore the target. If the target hasn't been restored, the command fails instead of restoring it. The option is passed to `dotnet list package`, so the .NET SDK used for the target must support it. It has no effect when packages are named with `--package`. Available for `install` and `list`, and for `uninstall` together with `--stale`.
-
 - **`-p|--package <ID@VERSION>`**
 
   For `install` and `list`, uses the specified package instead of a target. Specify an exact version, such as `Mockly@1.10.0`; floating versions and version ranges aren't accepted. Repeat the option to name several packages, with one version per package. Equivalent coordinates are deduplicated. The package must already be extracted in the NuGet global packages folder. Can't be combined with `--target`.
@@ -364,7 +350,7 @@ Human-readable reports and diagnostics remove terminal escape sequences and othe
 
 - **`--stale`**
 
-  For `uninstall`, removes only stale skills: tracked skills whose package the target no longer references, or references at a different version. Requires a solution or project. Can be combined with `--target`, `--no-restore`, `--dry-run`, and `--interactive`, but not with `--package`. For more information, see [Remove stale skills](#remove-stale-skills).
+  For `uninstall`, removes only stale skills: tracked skills whose package the target no longer references, or references at a different version. Requires a solution or project. Can be combined with `--target`, `--dry-run`, and `--interactive`, but not with `--package`. For more information, see [Remove stale skills](#remove-stale-skills).
 
 - **`-t|--target <PATH>`**
 
@@ -400,10 +386,10 @@ Human-readable reports and diagnostics remove terminal escape sequences and othe
   dotnet-package-skills install
   ```
 
-- Preview an installation without restoring the target or changing any skills:
+- Preview an installation without changing any skills:
 
   ```dotnetcli
-  dotnet-package-skills install --dry-run --no-restore
+  dotnet-package-skills install --dry-run
   ```
 
 - Choose which skills to install:
@@ -412,10 +398,10 @@ Human-readable reports and diagnostics remove terminal escape sequences and othe
   dotnet-package-skills install --interactive
   ```
 
-- Try the picker without restoring the target or changing any skills:
+- Try the picker without changing any skills:
 
   ```dotnetcli
-  dotnet-package-skills install -i --dry-run --no-restore
+  dotnet-package-skills install -i --dry-run
   ```
 
 - Install skills from exact package versions into a different skills folder:

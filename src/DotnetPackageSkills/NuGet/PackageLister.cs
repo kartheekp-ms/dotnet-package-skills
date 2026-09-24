@@ -13,19 +13,6 @@ public sealed record PackageReferenceInfo(string Id, string Version);
 /// </summary>
 public sealed class PackageLister(DotnetCli dotnet)
 {
-    /// <summary>
-    /// Substrings that identify "the project has not been restored" across SDK
-    /// versions and locales-in-English. Matched case-insensitively against combined output.
-    /// </summary>
-    private static readonly string[] NotRestoredHints =
-    [
-        "nu1004",
-        "assets file",
-        "project.assets.json",
-        "run a nuget package restore",
-        "run restore",
-    ];
-
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -33,67 +20,76 @@ public sealed class PackageLister(DotnetCli dotnet)
         AllowTrailingCommas = true,
     };
 
-    public IReadOnlyList<PackageReferenceInfo> List(string target, bool allowRestore)
+    /// <summary>
+    /// Runs <c>dotnet list package</c> as it is. Whether it restores is the SDK's call: the .NET 10
+    /// SDK restores when it needs to, and earlier SDKs say the target has to be restored first.
+    /// </summary>
+    /// <remarks>
+    /// This tool never restores. A failure is reported with what the SDK said, so the customer can
+    /// restore or fix whatever else it names, and then run the command again.
+    /// </remarks>
+    public IReadOnlyList<PackageReferenceInfo> List(string target)
     {
         // The target goes *before* the `package` verb: `dotnet list <TARGET> package`.
         var arguments = new List<string> { "list", target, "package", "--format", "json" };
-
-        if (!allowRestore)
-        {
-            // `dotnet list package` restores implicitly on current SDKs, so without passing
-            // this through it would restore anyway and --no-restore would be a silent no-op.
-            arguments.Add("--no-restore");
-        }
-
         var result = dotnet.Run(arguments, workingDirectory: Path.GetDirectoryName(target));
-
-        if (result.ExitCode != 0 && LooksUnrestored(result))
-        {
-            if (!allowRestore)
-            {
-                throw new PackageSkillsException(
-                    $"""
-                     '{target}' has not been restored, so its package list is unavailable.
-                     Run: dotnet restore "{target}"
-                     Or drop --no-restore to let this tool restore for you.
-                     """);
-            }
-
-            Restore(target);
-            result = dotnet.Run(arguments, workingDirectory: Path.GetDirectoryName(target));
-        }
 
         if (result.ExitCode != 0)
         {
             throw new PackageSkillsException(
                 $"""
                  'dotnet list "{target}" package' failed with exit code {result.ExitCode}:
-                 {result.Diagnostics}
+                 {ReportedProblems(result.StandardOutput) ?? result.Diagnostics}
+
+                 Resolve what it reports, for example by restoring the target, and then run this command again.
                  """);
         }
 
         return Parse(result.StandardOutput);
     }
 
-    private void Restore(string target)
+    /// <summary>
+    /// The problems that a JSON listing reports, one per line, or null when there are none. The
+    /// .NET 10 SDK reports a failed restore this way, on standard output.
+    /// </summary>
+    private static string? ReportedProblems(string output)
     {
-        var restore = dotnet.Run("restore", target);
-        if (restore.ExitCode != 0)
+        var start = output.IndexOf('{');
+        if (start < 0)
         {
-            throw new PackageSkillsException(
-                $"""
-                 'dotnet restore "{target}"' failed with exit code {restore.ExitCode}:
-                 {restore.Diagnostics}
-
-                 Restore has to succeed before bundled skills can be located, because the packages are only extracted to disk during restore.
-                 """);
+            return null;
         }
-    }
 
-    private static bool LooksUnrestored(ProcessResult result)
-    {
-        var combined = $"{result.StandardOutput}\n{result.StandardError}";
-        return NotRestoredHints.Any(hint => combined.Contains(hint, StringComparison.OrdinalIgnoreCase));
+        try
+        {
+            using var document = JsonDocument.Parse(output[start..]);
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("problems", out var problems) ||
+                problems.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var lines = problems.EnumerateArray()
+                .Where(problem => problem.ValueKind == JsonValueKind.Object)
+                .Select(problem => (Level: Text(problem, "level"), Text: Text(problem, "text")))
+                .Where(problem => !string.IsNullOrWhiteSpace(problem.Text))
+                .Select(problem => string.IsNullOrWhiteSpace(problem.Level)
+                    ? problem.Text!
+                    : $"{problem.Level}: {problem.Text}")
+                .ToList();
+
+            return lines.Count == 0 ? null : string.Join(Environment.NewLine, lines);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        static string? Text(JsonElement problem, string name) =>
+            problem.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
     }
 
     internal static IReadOnlyList<PackageReferenceInfo> Parse(string json)

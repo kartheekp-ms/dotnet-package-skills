@@ -18,7 +18,6 @@ public sealed record InstallRequest
 
     public required string Destination { get; init; }
     public required string WorkingDirectory { get; init; }
-    public bool AllowRestore { get; init; } = true;
     public string? GlobalPackagesOverride { get; init; }
     public bool DryRun { get; init; }
 }
@@ -99,7 +98,7 @@ public sealed class SkillInstallService(DotnetCli dotnet, SkillInstaller install
 
         // Keep every distinct (id, version) long enough to detect unsupported multi-version
         // collisions explicitly rather than silently selecting one package from the solution.
-        var packages = new PackageLister(dotnet).List(target, request.AllowRestore);
+        var packages = new PackageLister(dotnet).List(target);
 
         var (skills, skipped, candidates) = Collect(globalPackages, packages.Select(p => (p.Id, p.Version)));
 
@@ -445,14 +444,14 @@ public sealed class SkillInstallService(DotnetCli dotnet, SkillInstaller install
     }
 
     /// <summary>
-    /// Finds the target and lists its direct package references, restoring it first when that
-    /// is allowed and needed. This is all <c>uninstall --stale</c> reads: deciding which skills
-    /// are stale needs the references, not the packages, so the NuGet cache is never consulted.
+    /// Finds the target and lists its direct package references with <c>dotnet list package</c>.
+    /// This is all <c>uninstall --stale</c> reads: deciding which skills are stale needs the
+    /// references, not the packages, so the tool never looks in the NuGet cache for them.
     /// </summary>
-    public TargetReferences ReadReferences(string? target, string workingDirectory, bool allowRestore)
+    public TargetReferences ReadReferences(string? target, string workingDirectory)
     {
         var resolved = TargetLocator.Resolve(target, workingDirectory);
-        return new TargetReferences(resolved, new PackageLister(dotnet).List(resolved, allowRestore));
+        return new TargetReferences(resolved, new PackageLister(dotnet).List(resolved));
     }
 
     private static SkippedSkill ToSkipped(BundledSkill skill, string reason) =>

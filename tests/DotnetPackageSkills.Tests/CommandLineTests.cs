@@ -81,7 +81,7 @@ public class CommandLineTests
     public void Uninstall_stale_accepts_a_target_and_every_other_uninstall_option_but_a_package()
     {
         Assert.Empty(CommandLineBuilder.Build().Parse(
-            ["uninstall", "--stale", "--target", "App.sln", "--no-restore", "--dry-run", "-i", "-d", ".claude/skills"])
+            ["uninstall", "--stale", "--target", "App.sln", "--dry-run", "-i", "-d", ".claude/skills"])
             .Errors);
         Assert.Empty(CommandLineBuilder.Build().Parse(["uninstall", "--stale", "-t", "src"]).Errors);
         Assert.Empty(CommandLineBuilder.Build().Parse(["uninstall", "--stale"]).Errors);
@@ -96,17 +96,35 @@ public class CommandLineTests
     }
 
     [Theory]
-    [InlineData("--target", "App.sln")]
-    [InlineData("-t", "App.sln")]
-    [InlineData("--no-restore", null)]
-    public void Uninstall_target_and_no_restore_need_stale(string option, string? value)
+    [InlineData("--target")]
+    [InlineData("-t")]
+    public void Uninstall_target_needs_stale(string option)
     {
-        string[] args = value is null ? ["uninstall", option] : ["uninstall", option, value];
-
-        var result = CommandLineBuilder.Build().Parse(args);
+        var result = CommandLineBuilder.Build().Parse(["uninstall", option, "App.sln"]);
 
         Assert.Contains(result.Errors, error =>
-            error.Message.Contains("can be used with uninstall only together with --stale", StringComparison.Ordinal));
+            error.Message.Contains("--target can be used with uninstall only together with --stale", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("install", null)]
+    [InlineData("list", null)]
+    [InlineData("uninstall", "--stale")]
+    public void No_command_offers_no_restore(string command, string? extra)
+    {
+        // Restoring is left to dotnet list package and to the customer, so there is nothing to
+        // turn off here.
+        Assert.DoesNotContain(
+            CommandLineBuilder.Build().Subcommands.Single(candidate => candidate.Name == command).Options,
+            option => option.Name == "--no-restore");
+        string[] args = extra is null ? [command, "--no-restore"] : [command, extra, "--no-restore"];
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = CommandLineBuilder.Invoke(args, output, error);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Unrecognized command or argument '--no-restore'", error.ToString());
     }
 
     [Theory]

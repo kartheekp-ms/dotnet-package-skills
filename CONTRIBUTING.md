@@ -129,7 +129,7 @@ compares the manifest with the target's direct package references from `dotnet l
 never asks where the NuGet cache is, so a missing or partial cache can't change what counts as
 stale. A skill is stale when no referenced package has its ID and installed version, which also
 keeps it working when a target resolves two versions. `--stale` can't be combined with `--package`,
-and `uninstall` accepts `--target` and `--no-restore` only with `--stale`.
+and `uninstall` accepts `--target` only with `--stale`.
 
 **The picker pages, and that is the point.** A solution can reference many packages that ship
 skills. `SkillPicker` renders a frame that fits the window and redraws it in place, so the list
@@ -329,10 +329,12 @@ code. Comments explain *why*, not what — if a comment restates the code, delet
   a lot of teams are still on.
 - `dotnet list package --format json` requires SDK 7.0.200+. That is the floor for what the tool
   can inspect, and the error message says so when it isn't met.
-- **`dotnet list package` restores implicitly**, so `--no-restore` has to be forwarded to it. Left
-  off, the SDK restores anyway, the command succeeds, and the user's `--no-restore` becomes a
-  silent no-op — the failure mode is invisible, which is why `PackageListerTests` asserts the flag
-  is passed through.
+- **The tool never restores.** It runs `dotnet list package` as it is, without `--no-restore`,
+  and never runs `dotnet restore` itself. The .NET 10 SDK restores during the listing when it needs
+  to; earlier SDKs report that the target has to be restored first. A failed listing stops the
+  command with what the SDK reported, read from the JSON `problems` array when there is one, so the
+  customer can restore or fix the target and run the command again. `PackageListerTests` pins
+  both halves: the exact arguments, and that no restore is ever attempted.
 - Output of `dotnet nuget locals` has changed shape across SDK versions. Parsing keys off the
   `global-packages:` label rather than line position — keep it that way.
 
