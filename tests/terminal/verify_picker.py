@@ -313,7 +313,7 @@ class PickerRegression(unittest.TestCase):
 
     def suggested(self, arguments, with_target=False):
         """The uninstall command the tool suggests, with this fixture's target and destination."""
-        command = f"dotnet package-skills uninstall {arguments}"
+        command = f"dotnet-package-skills uninstall {arguments}"
         if with_target and self.target is not None:
             command += f' --target "{self.target}"'
         return command + f' --destination "{self.destination}"'

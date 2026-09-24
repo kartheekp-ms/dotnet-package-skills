@@ -12,10 +12,9 @@ Examples below use illustrative packages and paths. Interactive page sizes and l
 
 ## 2. Command structure
 
-Both invocation forms are equivalent:
+Invoke the tool by its command name:
 
 ```powershell
-dotnet package-skills <command> [options]
 dotnet-package-skills <command> [options]
 ```
 
@@ -71,7 +70,7 @@ Version output starts with `0.1.0` and may include build metadata after `+`.
 dotnet-package-skills list
 ```
 
-The tool finds a solution or project, reads its resolved direct dependencies, and looks for immediate subfolders of each package's `skills` directory that contain `SKILL.md`. Without `--target`, it prefers a top-level solution, then a top-level project, then a nested solution, then a nested project. `.slnx` precedes `.sln`. Multiple matches are resolved deterministically, not through an ambiguity prompt; the chosen path appears in `Target:`. Name a target when that choice matters.
+The tool runs [`dotnet list package`](https://learn.microsoft.com/dotnet/core/tools/dotnet-package-list) on a solution or project to find its top-level package references, and then looks for immediate subfolders of each package's `skills` directory that contain `SKILL.md`. Without `--target`, it uses a solution or project from the current directory or one of its subdirectories; the chosen path appears in `Target:`. Name a target when that choice matters.
 
 Sample output:
 
@@ -139,7 +138,7 @@ A target report ends with the skills it kept:
 2 installed skills belong to a package that the target no longer references:
   fabrikam.testing-fakes (fabrikam.testing 1.4.0)
   fabrikam.testing-fixtures (fabrikam.testing 1.4.0)
-Run 'dotnet package-skills uninstall --stale' to remove them.
+Run 'dotnet-package-skills uninstall --stale' to remove them.
 ```
 
 Installed skills are named by the lowercase package ID the manifest records. A reference can disappear temporarily, for example during a refactor, so removal after a package leaves the project is always an explicit command. The suggested command, like every command that an error suggests, repeats the `--target` and a non-default `--destination` of the run, so it can be run as printed.
@@ -227,7 +226,7 @@ Because the checklist only adds, it needs the installed skills to agree with the
 | --- | --- | --- |
 | More than one version of a package, in any mode | `...resolve to more than one version...` or `--package names more than one version...` | Align the versions, or name one version per package. |
 | Target: a resolved package is missing from the cache | `...resolved packages are missing from...` | Restore the target. |
-| Target: an installed skill is stale | `Cannot choose skills interactively because 2 installed skills don't match the target...` | Run `dotnet package-skills uninstall --stale`. |
+| Target: an installed skill is stale | `Cannot choose skills interactively because 2 installed skills don't match the target...` | Run `dotnet-package-skills uninstall --stale`. |
 | `--package`: a named package is installed at another version | `Contoso.Widgets 2.2.0 is already installed, and an interactive install only adds skills...` | Run `install --package` without `-i` to change the version, or `uninstall --package <ID>` first. |
 
 A skill is **stale** when the target no longer references its package, or references a different version than the manifest records. Skills installed with `install --package` from packages outside the target count as stale for target commands, so a target `install -i` stops until they are removed.

@@ -4,7 +4,7 @@ This document describes how v1 behaves, scenario by scenario. Rows marked **Chan
 
 ## 1. The idea
 
-NuGet packages can ship agent skills: folders that contain a `SKILL.md` file, under the package's `skills/` folder. `dotnet package-skills` copies those folders into your repository, where coding agents can read them. A manifest in the skills folder records which folders the tool copied, so it can refresh or remove them later without touching anything you wrote yourself.
+NuGet packages can ship agent skills: folders that contain a `SKILL.md` file, under the package's `skills/` folder. `dotnet-package-skills` copies those folders into your repository, where coding agents can read them. A manifest in the skills folder records which folders the tool copied, so it can refresh or remove them later without touching anything you wrote yourself.
 
 | Term | Meaning |
 | --- | --- |
@@ -289,4 +289,4 @@ Known consequence: skills added with `install --package` for packages outside th
 
 - [README](../README.md)
 - [Functional specification](functional-spec.md)
-- [`dotnet package-skills` command reference](dotnet-package-skills.md)
+- [`dotnet-package-skills` command reference](dotnet-package-skills.md)

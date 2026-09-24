@@ -77,7 +77,7 @@ public class OutputWriterTests
         Assert.Contains(
             "1 installed skill belongs to a package that the target no longer references:" + Environment.NewLine +
             "  contoso.widgets-usage (contoso.widgets 2.3.0)" + Environment.NewLine +
-            "Run 'dotnet package-skills uninstall --stale' to remove it.",
+            "Run 'dotnet-package-skills uninstall --stale' to remove it.",
             output.ToString());
     }
 
@@ -99,7 +99,7 @@ public class OutputWriterTests
         new OutputWriter(output).WriteInstallReport(result, copied: true);
 
         Assert.Contains($"2 installed skills belong to {packages} that the target no longer references:", output.ToString());
-        Assert.Contains("Run 'dotnet package-skills uninstall --stale' to remove them.", output.ToString());
+        Assert.Contains("Run 'dotnet-package-skills uninstall --stale' to remove them.", output.ToString());
     }
 
     [Fact]
@@ -109,13 +109,13 @@ public class OutputWriterTests
         var result = ResultWithCollision() with
         {
             Unreferenced = [new TrackedSkill("contoso.widgets", "2.3.0", "contoso.widgets-usage")],
-            StaleCommand = "dotnet package-skills uninstall --stale --destination \"my\u001b[2Jskills\"",
+            StaleCommand = "dotnet-package-skills uninstall --stale --destination \"my\u001b[2Jskills\"",
         };
 
         new OutputWriter(output).WriteInstallReport(result, copied: true);
 
         Assert.Contains(
-            "Run 'dotnet package-skills uninstall --stale --destination \"myskills\"' to remove it.",
+            "Run 'dotnet-package-skills uninstall --stale --destination \"myskills\"' to remove it.",
             output.ToString());
         Assert.DoesNotContain('\u001b', output.ToString());
     }

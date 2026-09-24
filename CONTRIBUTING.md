@@ -20,8 +20,8 @@ Try your build against a real repository without installing it:
 dotnet run --project src/DotnetPackageSkills -f net10.0 -- list --target /path/to/YourApp.sln
 ```
 
-Install your build as a global tool when you want to exercise the `dotnet package-skills` verb
-itself:
+Install your build as a global tool when you want to run the installed `dotnet-package-skills`
+command itself:
 
 ```bash
 dotnet pack src/DotnetPackageSkills -c Release -o ./artifacts

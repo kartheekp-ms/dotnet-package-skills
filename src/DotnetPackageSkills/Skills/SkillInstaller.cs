@@ -112,7 +112,7 @@ public sealed class SkillInstaller
                 stranded,
                 versions,
                 selected,
-                uninstallCommand ?? (arguments => $"dotnet package-skills uninstall {arguments}"));
+                uninstallCommand ?? (arguments => $"dotnet-package-skills uninstall {arguments}"));
         }
 
         var current = accepted.Select(skill => skill.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);

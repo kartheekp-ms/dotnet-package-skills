@@ -393,7 +393,7 @@ public class SkillInstallerTests
         Assert.Contains(
             "Alpha 2.0.0 no longer ships the installed skill 'shared', and Beta 2.0.0 ships a skill with that name",
             error.Message);
-        Assert.Contains("'dotnet package-skills uninstall --package Alpha' first", error.Message);
+        Assert.Contains("'dotnet-package-skills uninstall --package Alpha' first", error.Message);
         Assert.Contains("No skills were changed", error.Message);
         Assert.Equal(before, Snapshot(destination));
     }

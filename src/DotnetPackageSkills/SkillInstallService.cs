@@ -55,7 +55,7 @@ public sealed record InstallResult
     /// The command the report suggests for removing <see cref="Unreferenced"/> skills, spelled
     /// with the target and destination this run used.
     /// </summary>
-    public string StaleCommand { get; init; } = "dotnet package-skills uninstall --stale";
+    public string StaleCommand { get; init; } = "dotnet-package-skills uninstall --stale";
 
     /// <summary>
     /// Set when an interactive install found skills but every one is installed already or
@@ -472,7 +472,7 @@ public sealed class SkillInstallService(DotnetCli dotnet, SkillInstaller install
     {
         // A suggestion is only useful if running it as printed acts on the same skills folder,
         // compared against the same project.
-        var command = $"dotnet package-skills uninstall {arguments}";
+        var command = $"dotnet-package-skills uninstall {arguments}";
 
         if (withTarget && request.Target is not null)
         {

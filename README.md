@@ -37,7 +37,7 @@ dotnet tool install --global dotnet-package-skills
 From your repository root:
 
 ```bash
-dotnet package-skills install
+dotnet-package-skills install
 ```
 
 That is the whole workflow. It finds your solution or project, lists its packages, locates each
@@ -46,7 +46,7 @@ direct dependency in the NuGet cache, and copies any bundled skills into `.agent
 Run it again after adding or upgrading packages. It refreshes the skills of the packages it finds,
 and when a package moves to a new version, it removes the skills that version no longer ships. It
 never removes skills because a package left the project. Instead, it lists them, and
-`dotnet package-skills uninstall --stale` removes them.
+`dotnet-package-skills uninstall --stale` removes them.
 
 ### Commands
 
@@ -61,9 +61,9 @@ never removes skills because a package left the project. Instead, it lists them,
 Three ways to say which packages to take skills from:
 
 ```bash
-dotnet package-skills install                              # auto-detect solution or project
-dotnet package-skills install --target src/MyApp.slnx      # a specific solution or project
-dotnet package-skills install --package Mockly@1.10.0      # exact packages, no project needed
+dotnet-package-skills install                              # auto-detect solution or project
+dotnet-package-skills install --target src/MyApp.slnx      # a specific solution or project
+dotnet-package-skills install --package Mockly@1.10.0      # exact packages, no project needed
 ```
 
 `--package` is repeatable and needs an **exact version** — `Mockly@1.*` and `Mockly@[1.0,2.0)` are
@@ -96,7 +96,7 @@ When a package leaves the project, `install` keeps its skills and lists them:
 2 installed skills belong to a package that the target no longer references:
   fabrikam.testing-fakes (fabrikam.testing 1.4.0)
   fabrikam.testing-fixtures (fabrikam.testing 1.4.0)
-Run 'dotnet package-skills uninstall --stale' to remove them.
+Run 'dotnet-package-skills uninstall --stale' to remove them.
 ```
 
 The suggested command repeats the `--target` and `--destination` you passed, so you can run it as
@@ -108,8 +108,8 @@ one whose package the target no longer references, or references at a different 
 it with `--dry-run`, or pick among the stale skills with `--interactive`:
 
 ```bash
-dotnet package-skills uninstall --stale --dry-run
-dotnet package-skills uninstall --stale
+dotnet-package-skills uninstall --stale --dry-run
+dotnet-package-skills uninstall --stale
 ```
 
 `--stale` reads the project's package references, so it needs a solution or project: the one in
@@ -122,8 +122,8 @@ By default `install` copies everything it finds. Add `--interactive` to choose w
 add:
 
 ```bash
-dotnet package-skills install --interactive                          # everything the project references
-dotnet package-skills install --package Mockly@1.10.0 --interactive  # just one package's skills
+dotnet-package-skills install --interactive                          # everything the project references
+dotnet-package-skills install --package Mockly@1.10.0 --interactive  # just one package's skills
 ```
 
 It composes with `--target` and `--package`, so you can narrow to a single package first and then
@@ -160,9 +160,9 @@ opens, an interactive install stops without changing anything when:
 
 - the target resolves more than one version of a package, or `--package` names more than one;
 - with a target, a package the target resolves is missing from the NuGet cache;
-- with a target, an installed skill is stale. Run `dotnet package-skills uninstall --stale` first;
+- with a target, an installed skill is stale. Run `dotnet-package-skills uninstall --stale` first;
 - with `--package`, a named package is installed at another version. Run
-  `dotnet package-skills uninstall --package <ID>` first, or run `install --package <ID>@<VERSION>`
+  `dotnet-package-skills uninstall --package <ID>` first, or run `install --package <ID>@<VERSION>`
   without `--interactive` to move it to the new version.
 
 Each description follows the authored skill name immediately after ` - `, without a padded
@@ -217,7 +217,7 @@ before committing to it.
 wrote yourself, because it reads the manifest rather than the folder:
 
 ```bash
-dotnet package-skills uninstall --interactive
+dotnet-package-skills uninstall --interactive
 ```
 
 ```
@@ -283,15 +283,15 @@ errors, not an unfiltered uninstall. `--stale` and `--package` can't be combined
 `.agents/skills` is the vendor-neutral default. Point `--destination` anywhere else:
 
 ```bash
-dotnet package-skills install --destination .claude/skills
-dotnet package-skills install --destination .codex/skills
+dotnet-package-skills install --destination .claude/skills
+dotnet-package-skills install --destination .codex/skills
 ```
 
 `uninstall` takes the same option, and needs it: it only looks where you point it, so removing
 what you put in `.claude/skills` means saying so again.
 
 ```bash
-dotnet package-skills uninstall --destination .claude/skills
+dotnet-package-skills uninstall --destination .claude/skills
 ```
 
 ### Scripts and CI
@@ -303,8 +303,8 @@ reason on stderr. A command that stops changes nothing. Argument errors also pri
 A job that keeps a committed skills folder in step with the project can run:
 
 ```bash
-dotnet package-skills install
-dotnet package-skills uninstall --stale
+dotnet-package-skills install
+dotnet-package-skills uninstall --stale
 ```
 
 To see what's installed, read `.agents/skills/.dotnet-package-skills.json`, described in
@@ -511,7 +511,7 @@ containers and on hosted build agents); point `--global-packages` at that folder
 package. Align them, for example with Central Package Management, and try again.
 
 **"installed skills don't match the target"** (from `install --interactive`) — some installed
-skills are stale. Preview them with `dotnet package-skills uninstall --stale --dry-run`, remove
+skills are stale. Preview them with `dotnet-package-skills uninstall --stale --dry-run`, remove
 them with `uninstall --stale`, and try again.
 
 **"is already installed, and an interactive install only adds skills"** — `install --interactive

@@ -262,23 +262,23 @@ public class SkillInstallServiceTests
             request, service.Discover(request), SkillInstallService.InstalledSkills(destination, temp.Path)));
 
         Assert.Contains("Mockly 1.10.0 is already installed", error.Message);
-        Assert.Contains("'dotnet package-skills uninstall --package Mockly'", error.Message);
+        Assert.Contains("'dotnet-package-skills uninstall --package Mockly'", error.Message);
         Assert.Equal(before, Snapshot(destination));
     }
 
     [Theory]
-    [InlineData(".agents/skills", null, "--stale", true, "dotnet package-skills uninstall --stale")]
-    [InlineData(".agents/skills/", null, "--stale", true, "dotnet package-skills uninstall --stale")]
-    [InlineData(".claude/skills", null, "--stale", true, "dotnet package-skills uninstall --stale --destination .claude/skills")]
+    [InlineData(".agents/skills", null, "--stale", true, "dotnet-package-skills uninstall --stale")]
+    [InlineData(".agents/skills/", null, "--stale", true, "dotnet-package-skills uninstall --stale")]
+    [InlineData(".claude/skills", null, "--stale", true, "dotnet-package-skills uninstall --stale --destination .claude/skills")]
     [InlineData(
         "my skills", "src/My App.slnx", "--stale", true,
-        "dotnet package-skills uninstall --stale --target \"src/My App.slnx\" --destination \"my skills\"")]
+        "dotnet-package-skills uninstall --stale --target \"src/My App.slnx\" --destination \"my skills\"")]
     [InlineData(
         ".claude/skills", "src/App.slnx", "--package Mockly", false,
-        "dotnet package-skills uninstall --package Mockly --destination .claude/skills")]
+        "dotnet-package-skills uninstall --package Mockly --destination .claude/skills")]
     [InlineData(
         @"C:\src\skills", null, "--stale", true,
-        "dotnet package-skills uninstall --stale --destination \"C:\\src\\skills\"")]
+        "dotnet-package-skills uninstall --stale --destination \"C:\\src\\skills\"")]
     public void Suggested_commands_repeat_the_target_and_destination_that_were_used(
         string destination, string? target, string arguments, bool withTarget, string expected)
     {
@@ -296,7 +296,7 @@ public class SkillInstallServiceTests
         using var temp = new TempDirectory();
         var request = Request(temp) with { Destination = temp.Combine(".agents", "skills") };
 
-        Assert.Equal("dotnet package-skills uninstall --stale", SkillInstallService.UninstallCommand(request, "--stale"));
+        Assert.Equal("dotnet-package-skills uninstall --stale", SkillInstallService.UninstallCommand(request, "--stale"));
     }
 
     [Fact]
@@ -315,7 +315,7 @@ public class SkillInstallServiceTests
         var error = Assert.Throws<PackageSkillsException>(() => service.PrepareInteractiveInstall(
             request, service.Discover(request), SkillInstallService.InstalledSkills(".claude/skills", temp.Path)));
 
-        const string Command = "dotnet package-skills uninstall --stale --destination .claude/skills";
+        const string Command = "dotnet-package-skills uninstall --stale --destination .claude/skills";
         Assert.Equal(Command, result.StaleCommand);
         Assert.Contains($"Run '{Command}' first", error.Message);
     }
@@ -334,7 +334,7 @@ public class SkillInstallServiceTests
         var error = Assert.Throws<PackageSkillsException>(() => service.PrepareInteractiveInstall(
             upgrade, service.Discover(upgrade), SkillInstallService.InstalledSkills(".claude/skills", temp.Path)));
 
-        Assert.Contains("'dotnet package-skills uninstall --package Mockly --destination .claude/skills' first", error.Message);
+        Assert.Contains("'dotnet-package-skills uninstall --package Mockly --destination .claude/skills' first", error.Message);
     }
 
     [Fact]
@@ -355,7 +355,7 @@ public class SkillInstallServiceTests
         var error = Assert.Throws<PackageSkillsException>(() => service.Install(request));
 
         Assert.Contains("Alpha 2.0.0 no longer ships the installed skill 'shared'", error.Message);
-        Assert.Contains("'dotnet package-skills uninstall --package Alpha --destination .claude/skills' first", error.Message);
+        Assert.Contains("'dotnet-package-skills uninstall --package Alpha --destination .claude/skills' first", error.Message);
         Assert.Equal(before, Snapshot(destination));
     }
 
