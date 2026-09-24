@@ -34,10 +34,10 @@ The examples use these packages:
 
 | Option | `list` | `install` | `uninstall` | Meaning |
 | --- | --- | --- | --- | --- |
-| `-t, --target <PATH>` | Yes | Yes | With `--stale` | Solution or project to read. Without it, the tool finds one in the current folder and prefers a solution. Can't be combined with `--package`. |
+| `-t, --target <PATH>` | Yes | Yes | With `--stale` | Solution or project to read. Without it, the tool looks for one in the current folder, and then in its subfolders, preferring a solution. Can't be combined with `--package`. |
 | `-p, --package <ID@VERSION>` | Yes | Yes | | Name packages directly instead of reading a project. Repeatable, with one version per package. |
 | `-p, --package <ID[@VERSION]>` | | | Yes | Remove only this package's skills, or only if that version is installed. |
-| `--stale` | | | Yes | Remove only stale skills. Requires a project or solution: the one passed with `--target`, or the one found in the current folder. Can't be combined with `--package`. **New in v1.** |
+| `--stale` | | | Yes | Remove only stale skills. Requires a project or solution: the one passed with `--target`, or the one the tool finds. Can't be combined with `--package`. **New in v1.** |
 | `-d, --destination <PATH>` | Yes | Yes | Yes | The skills folder. |
 | `-i, --interactive` | | Yes | Yes | Choose skills from a paged checklist. |
 | `--dry-run` | | Yes | Yes | Show what would happen; change nothing. |
@@ -152,7 +152,7 @@ Skipped skills don't fail the command; it still exits with code 0. With `install
 | G5 | Same as G1. | `uninstall --dry-run` | Shows what would be removed. Nothing changes. |
 | G6 | Mockly 1.10.0 is installed, and the project now uses 1.11.0. | `uninstall --stale` | Removes Mockly's skills, because they don't match the project. To move them to 1.11.0 instead, run a plain `install`. **New in v1.** |
 | G7 | Nothing is stale. | `uninstall --stale` | Reports "Nothing to remove. No stale skills were found." and exits with code 0. **New in v1.** |
-| G8 | There's no solution or project in the current folder, and `--target` isn't given. | `uninstall --stale` | Stops with exit code 1 and asks for a target. Nothing is removed. **New in v1.** |
+| G8 | There's no solution or project in the current folder or its subfolders, and `--target` isn't given. | `uninstall --stale` | Stops with exit code 1 and asks for a target. Nothing is removed. **New in v1.** |
 
 ### H. Teams and source control
 
@@ -263,7 +263,7 @@ The manifest is the only file the tool writes besides the copied skills, and its
 | 5 | Each package has exactly one version in the manifest. |
 | 6 | When a package changes version, `install` and `install --package` refresh its skills and remove the ones that the new version dropped. |
 | 7 | `install` never removes skills of packages that left the project. It keeps them and prints a hint. |
-| 8 | `uninstall --stale` removes stale skills: skills whose package the project no longer references, or uses at a different version. It requires a project or solution, from `--target` or found in the current folder. |
+| 8 | `uninstall --stale` removes stale skills: skills whose package the project no longer references, or uses at a different version. It requires a project or solution, from `--target` or found by the tool. |
 | 9 | `install -i` only adds skills. It lists only skills that aren't installed, all unchecked, and leaves installed skills as they are. |
 | 10 | A project `install -i` stops with exit code 1 when any installed skill is stale, and asks you to run `uninstall --stale` first. |
 | 11 | Repositories are expected to use Central Package Management. `install`, in every mode, never proceeds when it finds two versions of the same package, whether or not that package ships skills. It stops with exit code 1, changes nothing, and names the package and its versions. Only direct references count, because those are all the tool reads. `list` still works. |
