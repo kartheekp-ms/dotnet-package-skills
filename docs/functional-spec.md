@@ -40,11 +40,11 @@ dotnet tool install --global --add-source C:\tool-feed dotnet-package-skills --v
 ### Help and version
 
 ```powershell
-dotnet package-skills --help
-dotnet package-skills install --help
-dotnet package-skills list --help
-dotnet package-skills uninstall --help
-dotnet package-skills --version
+dotnet-package-skills --help
+dotnet-package-skills install --help
+dotnet-package-skills list --help
+dotnet-package-skills uninstall --help
+dotnet-package-skills --version
 ```
 
 Representative root help:
@@ -68,7 +68,7 @@ Version output starts with `0.1.0` and may include build metadata after `+`.
 ## 3. Discover available skills: `list`
 
 ```powershell
-dotnet package-skills list
+dotnet-package-skills list
 ```
 
 The tool finds a solution or project, reads its resolved direct dependencies, and looks for immediate subfolders of each package's `skills` directory that contain `SKILL.md`. Without `--target`, it prefers a top-level solution, then a top-level project, then a nested solution, then a nested project. `.slnx` precedes `.sln`. Multiple matches are resolved deterministically, not through an ambiguity prompt; the chosen path appears in `Target:`. Name a target when that choice matters.
@@ -105,7 +105,7 @@ The cache directory itself must already exist before automatic project restore c
 ## 4. Install or refresh skills: `install`
 
 ```powershell
-dotnet package-skills install
+dotnet-package-skills install
 ```
 
 Without `--interactive`, the tool attempts to install every discovered skill. It preserves the authored folder names and records ownership in `.dotnet-package-skills.json` inside the destination. Refreshing a tracked skill replaces its whole folder, including local edits or added files. Protection for hand-written skills applies to separate, untracked folders.
@@ -149,8 +149,8 @@ If any resolved package is missing from a target's cache, `install` stops before
 There is no separate update command: running `install` again refreshes the applicable skill copies.
 
 ```powershell
-dotnet package-skills install --package Contoso.Widgets@2.3.0 --package Fabrikam.Testing@1.4.0
-dotnet package-skills install --destination .claude\skills
+dotnet-package-skills install --package Contoso.Widgets@2.3.0 --package Fabrikam.Testing@1.4.0
+dotnet-package-skills install --destination .claude\skills
 ```
 
 ### One version per package
@@ -166,7 +166,7 @@ Equivalent versions, such as `1.10` and `1.10.0`, count as one. `list` still sho
 ### Preview without installing
 
 ```powershell
-dotnet package-skills install --dry-run --no-restore
+dotnet-package-skills install --dry-run --no-restore
 ```
 
 Result excerpt:
@@ -184,9 +184,9 @@ Any planned removals appear under `Would remove`. A dry run does not copy or del
 ## 5. Choose skills interactively
 
 ```powershell
-dotnet package-skills install --interactive
-dotnet package-skills install --package Contoso.Widgets@2.3.0 -i
-dotnet package-skills install -i --dry-run --no-restore
+dotnet-package-skills install --interactive
+dotnet-package-skills install --package Contoso.Widgets@2.3.0 -i
+dotnet-package-skills install -i --dry-run --no-restore
 ```
 
 Representative page after making a selection, with `contoso.widgets-widget-testing` already installed:
@@ -272,7 +272,7 @@ Cancelled. Nothing was copied or removed.
 ## 6. Remove installed skills: `uninstall`
 
 ```powershell
-dotnet package-skills uninstall
+dotnet-package-skills uninstall
 ```
 
 This removes all skills tracked by the destination's ownership manifest. It does not remove NuGet packages or hand-written skills, and does not require a solution or the NuGet cache.
@@ -292,12 +292,12 @@ Removal reports name each skill's package by the lowercase ID the manifest recor
 Common variants:
 
 ```powershell
-dotnet package-skills uninstall --package Contoso.Widgets
-dotnet package-skills uninstall --package Contoso.Widgets@2.3.0
-dotnet package-skills uninstall --destination .claude\skills
-dotnet package-skills uninstall --dry-run
-dotnet package-skills uninstall --interactive
-dotnet package-skills uninstall --stale
+dotnet-package-skills uninstall --package Contoso.Widgets
+dotnet-package-skills uninstall --package Contoso.Widgets@2.3.0
+dotnet-package-skills uninstall --destination .claude\skills
+dotnet-package-skills uninstall --dry-run
+dotnet-package-skills uninstall --interactive
+dotnet-package-skills uninstall --stale
 ```
 
 A bare package ID matches the package's tracked skills; `ID@VERSION` matches them only if that version is the one installed. The manifest records one version per package, so there is never more than one to choose from. Both modes use the same case-insensitive package matching and normalized version comparison: for example, `1.10` matches `1.10.0`. An explicitly blank, whitespace-only, or missing filter value is an error, never an instruction to remove everything. Uninstall accepts the package option only once; repeated occurrences and aliases are rejected even if the final value is absent. Only omitting `--package` means no filter. A dry run reports `Would remove` and preserves the files.
