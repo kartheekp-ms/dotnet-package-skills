@@ -93,9 +93,9 @@ Found 4 skills:
 Other ways to scope discovery:
 
 ```powershell
-dotnet package-skills list --target C:\src\MyApp\MyApp.slnx
-dotnet package-skills list --target C:\src\MyApp\App.Web\App.Web.csproj
-dotnet package-skills list --package Contoso.Widgets@2.3.0
+dotnet-package-skills list --target C:\src\MyApp\MyApp.slnx
+dotnet-package-skills list --target C:\src\MyApp\App.Web\App.Web.csproj
+dotnet-package-skills list --package Contoso.Widgets@2.3.0
 ```
 
 An explicit package must already be extracted in the selected NuGet cache. Naming it does not download it or add it to a project. Such reports use `Target: (packages named on the command line)` and `Scanned N packages (named explicitly)`.
@@ -334,9 +334,9 @@ Nothing to remove. No skills installed by this tool were found there.
 `install` never removes the skills of a package that left the project. `uninstall --stale` removes every stale skill: a tracked skill whose package the target no longer references, or references at a different version than the manifest records.
 
 ```powershell
-dotnet package-skills uninstall --stale --dry-run
-dotnet package-skills uninstall --stale
-dotnet package-skills uninstall --stale --target C:\src\MyApp\MyApp.slnx --interactive
+dotnet-package-skills uninstall --stale --dry-run
+dotnet-package-skills uninstall --stale
+dotnet-package-skills uninstall --stale --target C:\src\MyApp\MyApp.slnx --interactive
 ```
 
 Sample output:
