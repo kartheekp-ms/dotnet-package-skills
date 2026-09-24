@@ -35,13 +35,13 @@ dotnet tool install --global --add-source ./artifacts dotnet-package-skills
 src/DotnetPackageSkills/
 ├── Program.cs              CLI surface: commands, options, exit codes
 ├── SkillInstallService.cs     Orchestration — the only place the steps are sequenced
-├── Cli/OutputWriter.cs     Human-readable and JSON rendering
+├── Cli/OutputWriter.cs     Human-readable reports
 ├── Cli/SkillPicker.cs      The --interactive picker, paged so one screen is one page
 ├── Cli/ITerminal.cs        Console access behind an interface, so the picker can be tested
 ├── Cli/InteractiveSkills.cs  Picker-only metadata and selection mapping
 ├── Infrastructure/         Process execution and the dotnet CLI wrapper
 ├── NuGet/                  Target detection, package listing, cache path resolution
-└── Skills/                 Discovery, copying, pruning, the install manifest
+└── Skills/                 Discovery, copying, version-change removal, the install manifest
 
 tests/DotnetPackageSkills.Tests/    xunit; no network, no dotnet invocations
 samples/Contoso.Widgets/            Example of a package that ships a skill
@@ -58,20 +58,34 @@ restore treat a cached package as corrupt, and removes the skill from every othe
 that package.
 
 **Removal is driven by the manifest, never by scanning the destination.** `.dotnet-package-skills.json`
-groups copied skill folder names under their package id and version; pruning and `uninstall` act
-only on those names. Users keep their own hand-written skills in the same folder, and deleting one
-of those would be unforgivable.
+records, for each package ID, the one installed version and the skill folder names it owns;
+`install` (when a package changes version) and `uninstall` act only on those names. Users keep
+their own hand-written skills in the same folder, and deleting one of those would be unforgivable.
 
 **An unreadable manifest stops every operation that needs ownership.** Never treat a malformed or
 unreadable manifest as empty. Empty means the existing folders are user-owned; corrupt means their
 ownership is unknown. `install` and `uninstall` must fail before changing anything and preserve the
 file so the user can repair or restore it. `list` may still run because it does not read ownership
 or write anything.
-An existing manifest must contain `installed`, and JSON properties and case-insensitive
-destination claims must be unique.
+An existing manifest must have a whole-number format `version` that the tool supports and a
+`packages` object. Package IDs must be valid by NuGet's own rule (`PackageCoordinate.IsValidId`,
+which allows letters outside ASCII), every package needs a non-empty version, JSON properties must
+be unique ignoring case, and case-insensitive destination claims must be unique. A newer format
+version asks the user to update the tool. A pre-release manifest, which has an `installed` array,
+is refused rather than converted. `SetSkills` refuses an ID that the reader would refuse, so the
+tool never writes a manifest that locks the destination.
 For v1, use ordinary manifest files and update them in place. The tool does not create symbolic
 links, and linked or redirected manifests are outside the v1 safety guarantees. Do not replace an
 existing manifest with a new inode merely to handle links: that can change Unix ownership or ACLs.
+
+**The manifest is a public contract.** Reports have no machine-readable form, so the manifest is
+what scripts read, and teams commit it. Its shape follows `dotnet-tools.json`: a format `version`
+and a `packages` object keyed by lowercase package ID. A change that an older tool would misread
+needs a new format `version`, so older tools refuse the file instead of guessing. Write it the same
+way on every platform: UTF-8 without a BOM, LF line endings with a final newline, packages and
+skills in ordinal order, and values escaped identically on `net8.0` and `net10.0`
+(`JsonWriterOptions.NewLine` doesn't exist on .NET 8, so the writer's CRLF is replaced after
+serializing). A platform-dependent byte is churn in someone's pull request.
 
 **No tracked skills means no manifest and no folder.** When the last entry goes, `install` and
 `uninstall` both delete `.dotnet-package-skills.json` and drop the destination folder if it is
@@ -84,7 +98,7 @@ still identifies skills by folder structure. Only interactive pickers read the t
 Never interpret the Markdown body, execute metadata, invent a description, or rewrite the file.
 Missing metadata gets an explicit placeholder; unreadable or invalid metadata gets a visible
 warning without hiding the skill. This intentionally replaces the former no-frontmatter-parsing
-rule so users can make an informed selection. Regular reports, JSON, and manifests are unchanged.
+rule so users can make an informed selection. Reports and the manifest never include descriptions.
 
 **Skill names from packages are untrusted input.** They become path segments in the user's repo.
 `SkillDiscovery.IsSafeSkillName` is the shared discovery/manifest gate; keep it strict. Reject names
@@ -92,16 +106,30 @@ ending in dots or spaces on every platform, since Windows can normalize them to 
 the destination itself. Before mutation, resolve all affected skill paths as direct children of the
 destination; removing a skill must not walk up and delete its parents.
 
-**Only complete, noninteractive target discovery licenses automatic pruning.** `--package` says
-nothing about unrelated installed skills, and an interactive picker may remove only explicitly
-deselected rows. A missing resolved target package stops installation before any writes, including
-previews; an incomplete cache must never look like permission to delete skills.
+**`install` removes a skill only when its package changes version.** A noninteractive install
+offers the resolved packages it found in the cache. A tracked skill goes only if its package is
+offered at a different normalized version, the new version doesn't ship it, and no ownership
+conflict protects it. When a conflict does protect it, `install` stops instead: removing it would
+hand its name to the other package, and relabeling it would record the old version's copy under
+the new version, where no later run would remove it. A package that left the project is never a
+reason to delete, because a reference can vanish for a moment: `install` reports those skills as
+unreferenced, and `uninstall --stale` removes them when asked. A version missing from the cache
+never causes a removal, and a target install stops before any writes, including previews, when a
+resolved package is missing. An incomplete cache must never look like permission to delete skills.
 
-**A deselection removes; an omission does not.** `--interactive` hands `SkillInstaller.Install` a
-`deselected` set of destination paths, and those go even when `prune` is false. That is not a hole
-in the rule above: pruning is inferred from a complete package set, whereas a user turning a skill
-off is a direct instruction about that skill. Only paths the picker actually displayed may go in
-that set, so interactive mode can never remove something it did not show.
+**`install -i` only adds.** The checklist lists only skills that would install cleanly and aren't
+tracked, nothing starts checked, and the installer gets an empty offered-packages map, so nothing
+is refreshed or removed. Every check that could stop the run happens before the checklist opens:
+two versions of a package; with a target, a missing package or a stale skill; with `--package`, a
+named package tracked at another version. Adding beside a stale skill would leave the manifest
+disagreeing with the project, and adding beside another version would give a package two versions.
+
+**`uninstall --stale` reads references, not packages.** It needs a solution or project, and it
+compares the manifest with the target's direct package references from `dotnet list package`. It
+never asks where the NuGet cache is, so a missing or partial cache can't change what counts as
+stale. A skill is stale when no referenced package has its ID and installed version, which also
+keeps it working when a target resolves two versions. `--stale` can't be combined with `--package`,
+and `uninstall` accepts `--target` and `--no-restore` only with `--stale`.
 
 **The picker pages, and that is the point.** A solution can reference many packages that ship
 skills. `SkillPicker` renders a frame that fits the window and redraws it in place, so the list
@@ -122,9 +150,11 @@ at their actual content rather than a run of blank rows.
 
 Two things follow from redrawing in place, and both are easy to break. Rows are padded to the
 measured width, and rows below a shorter frame are blanked, because overwriting is the only way
-to erase without ANSI. And the widest possible summary is measured rather than the current one,
-since the removal clause appears and disappears as you select. Chrome that would do nothing is
-dropped: no counter on a single page, no movement or select-all keys for a single skill.
+to erase without ANSI. And the widest summary, with every row ticked, is measured rather than the
+current one, so counts growing as you select never reflow the frame. Chrome that would do nothing
+is dropped: no counter on a single page, no movement or select-all keys for a single skill. The
+note under the title is optional chrome too: when the window can't fit it, the layout drops the
+note rather than refusing to open.
 
 **Keyboard hints follow Aspire's checklist style.** The primary hint is
 `(Press <space> to select, <enter> to accept)`, below the list. Use the same angle-bracket key
@@ -134,16 +164,16 @@ paging and scrolling when they are useful.
 
 **Focus, checked state, and removal are separate cues.** The focused skill's text and all wrapped
 description lines are blue. A checked item has a blue uppercase `X`; names do not become green or
-red because of selection. Pending removal colors only the `[` and `]` red, even when the rest of
-the row is focused blue. A summary counts pending actions. No-color terminals use compact `+`/`-` action markers
-instead; respect `NO_COLOR`. A dedicated status column would take space away from descriptions.
+red because of selection. In the uninstall picker, a ticked row's `[` and `]` turn red, even when
+the rest of the row is focused blue; the install picker has no removal cue, because it can't
+remove anything. The summary counts ticked skills, and the uninstall summary also says how many
+will go. No-color terminals use a compact `+` (install) or `-` (remove) marker instead; respect
+`NO_COLOR`. A dedicated status column would take space away from descriptions.
 
-**A tick means the opposite thing in each picker, and that is deliberate.** Installing, it keeps
-the skill, so what is already there starts ticked and pressing enter changes nothing.
-Uninstalling, it deletes, so nothing starts ticked and pressing enter still changes nothing.
-`PickerMode` carries the difference; the safe default in both is that confirming without touching
-anything is a no-op. The uninstall list comes from the manifest, so a skill someone wrote by hand
-is never offered for deletion.
+**A tick means install in one picker and remove in the other.** Neither starts with anything
+ticked, so pressing enter without touching anything changes nothing in both. `PickerMode` carries
+the difference: the summary, the legend, and the removal cue. The uninstall list comes from the
+manifest, so a skill someone wrote by hand is never offered for deletion.
 
 **The picker owns the terminal, so it has to hand it back.** `Choose` hides the cursor and takes
 Ctrl+C as input, and restores both in a `finally`. Ctrl+C is why: left to the runtime it ends the
@@ -151,11 +181,9 @@ process mid-frame, so the restore never runs and the user is left typing into a 
 cursor. Taken as a key it cancels through the same path as `esc`. Note the modifier is tested
 before the switch, because a bare `c` clears the selection.
 
-**Retained copies stay checked until explicitly deselected.** Target-based install pickers include
-manifest-owned skills no longer supplied by the target, even when discovery has zero candidates.
-Their descriptions come from the installed copies. Ownership snapshots are rechecked before
-applying an interactive choice; concurrent ownership changes invalidate it rather than changing
-which package's files are affected.
+**An interactive choice applies only to the ownership it was made against.** Ownership snapshots
+are rechecked before applying an interactive choice; concurrent ownership changes invalidate it
+rather than changing which package's files are affected.
 Hold the destination lock from ownership loading through the final manifest write. Both
 installation and uninstallation participate, so another tool invocation cannot change ownership
 between the check and mutation. Canonicalize destination aliases before choosing the lock.
@@ -186,8 +214,14 @@ when it exits or fails, so ordinary command output retains its existing behavior
 display field with `TerminalText.Sanitize`, including package/version metadata, paths, skipped
 reasons, and operational errors. Framework parser diagnostics and suggestions use a separate output
 path and must be sanitized too, including split writes. Keep multiline error guidance readable.
-Never sanitize arguments before validation, persist sanitized display values, or sanitize serialized
-JSON; canonical identities must remain intact.
+Never sanitize arguments before validation or persist sanitized display values; canonical
+identities must remain intact.
+
+**Reports are for people; there is no JSON report.** The manifest is the machine-readable record,
+and exit codes carry success or failure. Don't bring back a `--json` report without revisiting
+that decision. Because `--package` accepts several values, the parser hands it any unknown option
+that follows, such as a `--json` left in an old script; its validator reports a value starting
+with `-` as an unrecognized argument rather than as a malformed package.
 
 **`--package` refuses floating versions and ranges.** Resolving one means choosing a version, and
 the only correct answer comes from a project's restore. `PackageCoordinate.Parse` is the gate.
@@ -206,8 +240,9 @@ do not create destination path segments. A skill must be an immediate subdirecto
 case-insensitively. Package enumeration and skill discovery stay deterministic so the first match
 wins reproducibly. An existing untracked destination folder is user-owned and untouchable.
 Different packages cannot transfer an already-tracked destination between owners in any install
-mode. A skipped conflicting path is protected from pruning as well as copying. Same-package
-version refreshes remain allowed.
+mode. A skipped conflicting path is protected from version-change removal as well as copying.
+Same-package version refreshes remain allowed. A protected skill is never relabeled to a version
+that doesn't ship it; that case stops the install, as described above.
 Keep all discovery candidates internally until install-time ownership is known. Prefer the
 current owner's candidate; `list` remains a destination-independent discovery report.
 Package authors avoid collisions by prefixing skill folders with their lowercased package ID, but
@@ -221,14 +256,17 @@ or add special reconciliation logic without revisiting that scope.
 error; only an absent `--package` means all packages. Interactive and noninteractive uninstall
 use the same normalized version matcher.
 
-**Side-by-side package versions are not represented in the destination.** Repositories are expected
-to align package versions with NuGet Central Package Management. `PackageLister.Parse` still keeps
-distinct `(id, version)` pairs so multiple versions produce a visible collision warning instead of
-a silent overwrite.
+**One version per package, or no install.** The manifest records one version per package. When
+the resolved packages, or the `--package` coordinates, include two normalized versions of one ID,
+every install mode stops before any change and asks for the versions to be aligned; repositories
+are expected to use NuGet Central Package Management. `PackageLister.Parse` keeps distinct
+`(id, version)` pairs so the check can see them, and `list` still shows both.
 
 **Errors should read as guidance.** Throw `PackageSkillsException` with a message that tells the
 user what to do next. `Program.cs` prints it without a stack trace. If a message would leave
-someone stuck, it needs more words.
+someone stuck, it needs more words. A command in a message has to work when pasted as printed:
+build it with `SkillInstallService.UninstallCommand`, which repeats the run's `--target` and
+non-default `--destination`.
 
 ## Tests
 
@@ -261,7 +299,9 @@ artifacts\terminal-venv\Scripts\python.exe tests\terminal\verify_picker.py `
 
 Rendered frames and raw terminal output are saved under the supplied artifacts directory.
 The suite checks descriptions, action/focus colors, no-color markers, variable-height pagination,
-scrolling, resize, confirm/cancel, dry runs, ownership preservation, and the unchanged JSON contract.
+scrolling, resize, confirm/cancel, dry runs, ownership preservation, the add-only install
+checklist and its pre-flight stops, `uninstall --stale`, the two-versions stop, the rejected
+`--json` option, and the manifest's bytes.
 The duplicate-frame regressions also feed the real terminal output through an xterm emulator
 that models normal-buffer text reflow and alternate screens; a clipped-cell mock alone misses
 the host behavior that originally left stale headings in scrollback.
