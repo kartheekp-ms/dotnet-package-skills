@@ -367,9 +367,3 @@ If a file system error interrupts a copy or removal, the command reports it but 
   dotnet-package-skills install
   dotnet-package-skills uninstall --stale
   ```
-
-## See also
-
-- [Functional specification](functional-spec.md)
-- [Scenarios and expected behavior](scenarios.md)
-- [README](../README.md)
