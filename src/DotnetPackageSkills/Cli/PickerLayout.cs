@@ -57,7 +57,13 @@ internal sealed class PickerLayout
 
     public bool SupportsColor { get; }
 
-    public int ContinuationColumn => SupportsColor ? 6 : 8;
+    /// <summary>
+    /// Where a wrapped description continues: past the cursor, the checkbox, and a space. Both
+    /// pickers draw a row the same way, with or without color.
+    /// </summary>
+    public int ContinuationColumn => RowPrefix;
+
+    private const int RowPrefix = 6;
 
     public IReadOnlyList<Entry> Entries { get; }
 
@@ -120,9 +126,9 @@ internal sealed class PickerLayout
         var cleanNote = note is null ? null : TerminalText.Sanitize(note);
         var longestName = labels.Max(TerminalText.Width);
         var longestDescription = descriptions.Max(description => description.Split('\n').Max(TerminalText.Width));
-        var prefix = supportsColor ? 6 : 8;
+        var prefix = RowPrefix;
         var summaryBounds = new[] { Summary(items.Count, items.Count, mode) };
-        var helpWidths = HelpFor(items.Count, items.Count, supportsColor, mode).Select(TerminalText.Width);
+        var helpWidths = HelpFor(items.Count, items.Count, supportsColor).Select(TerminalText.Width);
         var naturalWidth = new[]
         {
             labels.Select((label, index) => prefix + TerminalText.Width(label) + 3 +
@@ -161,7 +167,7 @@ internal sealed class PickerLayout
         while (true)
         {
             var headerRows = Header(cleanTitle, cleanNote, pageCount, pageCount, width).Count;
-            var help = HelpFor(items.Count, pageCount, supportsColor, mode)
+            var help = HelpFor(items.Count, pageCount, supportsColor)
                 .SelectMany(line => TerminalText.Wrap(line, width)).ToArray();
             var footerRows = summaryBounds.Max(summary => TerminalText.Wrap(summary, width).Count) + help.Length;
             var budget = windowHeight - 1 - headerRows - 2 - footerRows;
@@ -258,7 +264,7 @@ internal sealed class PickerLayout
 
     private static string Counter(int page, int pages) => $"page {page} of {pages}";
 
-    private static IEnumerable<string> HelpFor(int items, int pages, bool supportsColor, PickerMode mode)
+    private static IEnumerable<string> HelpFor(int items, int pages, bool supportsColor)
     {
         yield return PrimaryHelp;
         if (items > 1)
@@ -274,13 +280,13 @@ internal sealed class PickerLayout
         yield return items > 1
             ? "(Press <a> to select all, <c> to clear all, <Esc>/<q>/<Ctrl+C> to cancel)"
             : "(Press <Esc>/<q>/<Ctrl+C> to cancel)";
-        yield return (supportsColor, mode) switch
+
+        // Each checklist does one thing, so a tick needs no cue for what it does: the title and
+        // the summary say that. The legend only explains the color, so without color it goes.
+        if (supportsColor)
         {
-            (true, PickerMode.Install) => "Blue X: selected",
-            (true, _) => "Blue X: selected   Red brackets: remove",
-            (false, PickerMode.Install) => "+ install",
-            _ => "- remove",
-        };
+            yield return "Blue X: selected";
+        }
     }
 
     private static PackageSkillsException TooSmall(int width, int height, string minimum) => new(

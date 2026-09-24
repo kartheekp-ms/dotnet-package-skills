@@ -1141,12 +1141,15 @@ class PickerRegression(unittest.TestCase):
         self.assertNotIn("alpha-", terminal.text)
         self.assertIn("0 of 10", terminal.compact)
         terminal.press(SPACE, lambda: "[X]" in terminal.focused, "select removal")
-        self.assertEqual(["brightred", "brightblue", "brightred"], terminal.colors("[X]"))
+        self.assertEqual({"brightblue"}, set(terminal.colors("[X]")))
         self.assertEqual({"brightblue"}, set(terminal.colors("beta-01")))
+        self.assertIn("Blue X: selected", terminal.text)
         terminal.press(DOWN, lambda: "beta-02" in terminal.focused, "leave the removal checked")
-        self.assertNotIn("brightred", terminal.colors("beta-01"))
         self.assertNotIn("brightblue", terminal.colors("beta-01"))
-        self.assertEqual(["brightred", "brightblue", "brightred"], terminal.colors("[X]"))
+        self.assertEqual(["default", "brightblue", "default"], terminal.colors("[X]"))
+        self.assertNotIn(
+            "brightred",
+            {cell.fg for line in terminal.screen.buffer.values() for cell in line.values()})
         self.assertEqual(0, terminal.finish())
         self.assertEqual({f"beta-{number:02}" for number in range(2, 11)}, self.installed())
 
@@ -1336,16 +1339,18 @@ class PickerRegression(unittest.TestCase):
                     self.assertIn("Cancelled." if key != ENTER else "Would", state["normal"])
                     self.assertEqual(before, snapshot(self.destination))
 
-    def test_no_color_mode_exposes_action_markers_without_color(self):
+    def test_no_color_mode_shows_ticks_without_markers_or_color(self):
         terminal = self.terminal(no_color=True).ready()
         terminal.press(SPACE, lambda: "[X]" in terminal.focused, "no-color installation")
-        self.assertIn("+", terminal.focused)
-        self.assertNotIn("brightgreen", terminal.colors("alpha-01"))
+        self.assertTrue(terminal.focused.startswith("> [X] alpha-01 - "), terminal.focused)
+        self.assertEqual({"default"}, set(terminal.colors("alpha-01")))
         self.assertNotIn("brightblue", terminal.colors(">"))
+        self.assertNotIn("Blue X", terminal.text)
         self.assertEqual(0, terminal.finish())
         terminal = self.terminal("uninstall", no_color=True).ready()
         terminal.press(SPACE, lambda: "[X]" in terminal.focused, "no-color removal")
-        self.assertIn("-", terminal.focused.split("alpha-01")[0])
+        self.assertTrue(terminal.focused.startswith("> [X] alpha-01 - "), terminal.focused)
+        self.assertNotIn("Blue X", terminal.text)
         self.assertEqual(0, terminal.finish())
         self.assertEqual(set(), self.installed())
 

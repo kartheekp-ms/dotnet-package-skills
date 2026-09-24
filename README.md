@@ -171,7 +171,7 @@ lines flow beneath the skill text, using the available width rather than leaving
 The focused skill's text, including wrapped description lines, is blue. Checked items have a blue
 `X`; other skill names and descriptions use their normal color. The summary counts the checked
 skills; there is no separate status column. With `NO_COLOR` set, or on a terminal without color
-support, a compact `+` marker shows which skills will be installed.
+support, `>` marks the focused skill and `[X]` the checked ones, with nothing else beside them.
 
 The keyboard hints appear below the list, using Aspire's
 `(Press <space> to select, <enter> to accept)` style. Every keyboard-help line starts with `Press`,
@@ -234,13 +234,13 @@ Which skills should be uninstalled?
 (Press <space> to select, <enter> to accept)
 (Press <up>/<down> to move, <Home>/<End> for first/last)
 (Press <a> to select all, <c> to clear all, <Esc>/<q>/<Ctrl+C> to cancel)
-Blue X: selected Red brackets: remove
+Blue X: selected
 ```
 
-Nothing starts ticked, so a mistaken enter removes nothing. The square brackets of a ticked row
-turn red to mark it for removal; with `NO_COLOR`, a `-` marks it instead. Narrow the list first
-with `--package` if you only care about one package, or with `--stale` to see only the skills that
-no longer match the project:
+Nothing starts ticked, so a mistaken enter removes nothing. A ticked row looks the same as in the
+install checklist: each checklist does only one thing, so the title and the summary say what a
+tick does. Narrow the list first with `--package` if you only care about one package, or with
+`--stale` to see only the skills that no longer match the project:
 
 ```
 Which skills should be uninstalled?

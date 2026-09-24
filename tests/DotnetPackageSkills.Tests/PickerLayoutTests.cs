@@ -202,6 +202,23 @@ public class PickerLayoutTests
     }
 
     [Fact]
+    public void Both_pickers_share_one_legend_and_rows_start_in_the_same_column_without_color()
+    {
+        var items = new[] { new SkillPickerItem("alpha", "P", "1", "One two three four five six seven eight nine ten.") };
+
+        var install = PickerLayout.For(items, "Skills", PickerMode.Install, 46, 24, true);
+        var uninstall = PickerLayout.For(items, "Skills", PickerMode.Uninstall, 46, 24, true);
+        var plain = PickerLayout.For(items, "Skills", PickerMode.Uninstall, 46, 24, false);
+
+        Assert.Equal(install.Help, uninstall.Help);
+        Assert.Contains("Blue X: selected", uninstall.Help);
+        Assert.All(plain.Help, line => Assert.StartsWith("(Press <", line));
+        Assert.Equal(install.ContinuationColumn, plain.ContinuationColumn);
+        Assert.Equal(install.Entries[0].DescriptionColumn, plain.Entries[0].DescriptionColumn);
+        Assert.Equal(install.Entries[0].Description, plain.Entries[0].Description);
+    }
+
+    [Fact]
     public void A_window_too_small_for_the_note_drops_the_note_rather_than_the_checklist()
     {
         // At 46x18 the scrolling description needs every row the rest of the frame leaves, so the

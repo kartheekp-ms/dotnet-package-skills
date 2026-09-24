@@ -8,7 +8,6 @@ internal enum TerminalStyle
     Default,
     Focus,
     Selected,
-    Remove,
     Muted,
 }
 
@@ -175,7 +174,6 @@ internal sealed class SystemTerminal : ITerminal
         {
             TerminalStyle.Focus => ConsoleColor.Blue,
             TerminalStyle.Selected => ConsoleColor.Blue,
-            TerminalStyle.Remove => ConsoleColor.Red,
             TerminalStyle.Muted => ConsoleColor.DarkGray,
             _ => (ConsoleColor?)null,
         };

@@ -281,6 +281,7 @@ The manifest is the only file the tool writes besides the copied skills, and its
 | 22 | When a package moves to a version that no longer ships an installed skill, and another package in the same run ships a skill with that name, `install` stops and suggests `uninstall --package`. It doesn't hand the name over, and it doesn't keep the old copy under the new version (E6). |
 | 23 | The commands that reports and errors suggest repeat the `--target` and `--destination` of the command that was run, so they can be run as printed. |
 | 24 | Package IDs follow NuGet's own rule, which allows letters outside ASCII, on the command line and in the manifest. The tool never writes a manifest that it would refuse to read. |
+| 25 | Both checklists draw a checked skill the same way, with a blue X, because each does only one thing: the title and the summary say whether a check installs or removes. There's no separate removal cue, and without color, `[X]` alone marks a checked skill. |
 
 Known consequence: skills added with `install --package` for packages outside the project count as stale for project commands, so a project `install -i` stops until they're removed.
 

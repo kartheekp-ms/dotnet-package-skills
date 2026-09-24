@@ -173,9 +173,8 @@ Each row shows `skill-name - description`. Descriptions come from the top-level 
 | Visual cue | Meaning |
 | --- | --- |
 | Blue row text | Keyboard focus, including wrapped description lines. |
-| Blue `X` | Checked: install in the install picker, or remove in the uninstall picker. |
-| Red `[` and `]` | Marked for removal in the uninstall picker. |
-| `+` or `-` | Marked for installation or removal when color is disabled, for example by `NO_COLOR`. |
+| Blue `X` | Checked: install in the install picker, or remove in the uninstall picker. Both pickers draw a checked row the same way. |
+| `>` and `[X]` | Focus and checked state when color is disabled, for example by `NO_COLOR`. No other marker is shown. |
 
 | Key | Action |
 | --- | --- |
@@ -224,7 +223,7 @@ Which skills should be uninstalled?
 (Press <space> to select, <enter> to accept)
 (Press <up>/<down> to move, <Home>/<End> for first/last)
 (Press <a> to select all, <c> to clear all, <Esc>/<q>/<Ctrl+C> to cancel)
-Blue X: selected Red brackets: remove
+Blue X: selected
 ```
 
 A tracked skill can be removed even if its installed `SKILL.md` file is missing. When nothing is tracked, the command succeeds without opening a picker:
@@ -272,7 +271,7 @@ Only skills that don't match the target are listed.
 (Press <space> to select, <enter> to accept)
 (Press <up>/<down> to move, <Home>/<End> for first/last)
 (Press <a> to select all, <c> to clear all, <Esc>/<q>/<Ctrl+C> to cancel)
-Blue X: selected Red brackets: remove
+Blue X: selected
 ```
 
 `--stale` can't be combined with `--package`. `--target` and `--no-restore` are available for `uninstall` only together with `--stale`.

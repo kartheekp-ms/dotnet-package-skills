@@ -196,17 +196,39 @@ public class SkillPickerTests
     }
 
     [Fact]
-    public void An_install_list_never_marks_a_row_for_removal()
+    public void An_install_list_never_mentions_removal()
     {
         var terminal = new FakeTerminal()
             .Press(ConsoleKey.Spacebar, ConsoleKey.Spacebar, ConsoleKey.A, ConsoleKey.C, ConsoleKey.Enter);
 
         new SkillPicker(terminal).Choose(Items(3), Title);
 
-        Assert.All(terminal.FrameWrites, writes =>
-            Assert.DoesNotContain(writes, write => write.Style == TerminalStyle.Remove));
         Assert.All(terminal.Frames, frame =>
             Assert.DoesNotContain("remove", frame, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Both_pickers_draw_a_tick_the_same_way(bool uninstall)
+    {
+        // Each checklist does one thing, so a tick needs no second cue for what it does; the
+        // title and the summary say that. Only the X is blue, and the brackets follow the row.
+        var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.DownArrow, ConsoleKey.Enter);
+
+        new SkillPicker(terminal).Choose(Items(3), Title, uninstall ? PickerMode.Uninstall : PickerMode.Install);
+
+        Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 1, 1, "X").Style);
+        Assert.Equal(TerminalStyle.Focus, CheckboxSpan(terminal, 1, 1, "[").Style);
+        Assert.Equal(TerminalStyle.Focus, CheckboxSpan(terminal, 1, 1, "]").Style);
+        Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 2, 1, "X").Style);
+        Assert.Equal(TerminalStyle.Default, CheckboxSpan(terminal, 2, 1, "[").Style);
+        Assert.Equal(TerminalStyle.Default, CheckboxSpan(terminal, 2, 1, "]").Style);
+        Assert.All(terminal.Frames, frame =>
+        {
+            Assert.Contains("Blue X: selected", frame);
+            Assert.DoesNotContain("brackets", frame, StringComparison.OrdinalIgnoreCase);
+        });
     }
 
     [Fact]
@@ -254,7 +276,7 @@ public class SkillPickerTests
     }
 
     [Fact]
-    public void Uninstalling_marks_a_ticked_row_for_removal()
+    public void Uninstalling_a_ticked_row_says_how_many_skills_will_be_removed()
     {
         var terminal = new FakeTerminal().Press(ConsoleKey.Spacebar, ConsoleKey.Enter);
 
@@ -263,8 +285,7 @@ public class SkillPickerTests
 
         Assert.Equal("skill-01", Assert.Single(choice!));
         Assert.Equal("[X] skill-01 - No description provided.", Rows(terminal.Frames[1])[0]);
-        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 1, 1, "[").Style);
-        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 1, 1, "]").Style);
+        Assert.Contains("1 of 3 selected; 1 to remove", terminal.Frames[1]);
         Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 1, 1, "X").Style);
         Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 1, 1).Style);
     }
@@ -1177,7 +1198,7 @@ public class SkillPickerTests
     }
 
     [Fact]
-    public void Blue_focus_covers_the_row_but_removal_brackets_stay_red()
+    public void Blue_focus_covers_the_whole_row_and_a_tick_away_from_focus_keeps_only_its_blue_x()
     {
         var terminal = new FakeTerminal()
             .Press(ConsoleKey.Spacebar, ConsoleKey.DownArrow, ConsoleKey.Spacebar, ConsoleKey.UpArrow, ConsoleKey.Enter);
@@ -1186,10 +1207,11 @@ public class SkillPickerTests
 
         Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 1, 1).Style);
         Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 2, 1).Style);
-        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 3, 2, "[").Style);
+        Assert.Equal(TerminalStyle.Focus, CheckboxSpan(terminal, 3, 2, "[").Style);
         Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 4, 1).Style);
         Assert.Equal(TerminalStyle.Default, SkillSpan(terminal, 4, 2).Style);
-        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 4, 2, "]").Style);
+        Assert.Equal(TerminalStyle.Default, CheckboxSpan(terminal, 4, 2, "]").Style);
+        Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 4, 2, "X").Style);
         Assert.All(terminal.FrameWrites, writes =>
         {
             var focus = Assert.Single(writes, write => write.Text == ">");
@@ -1254,57 +1276,40 @@ public class SkillPickerTests
         var chosen = new SkillPicker(terminal).Choose(Items(3), Title, PickerMode.Uninstall);
 
         Assert.Empty(chosen!);
-        Assert.Equal(TerminalStyle.Remove, CheckboxSpan(terminal, 1, 1, "[").Style);
+        Assert.Equal(TerminalStyle.Selected, CheckboxSpan(terminal, 1, 1, "X").Style);
         Assert.Equal(TerminalStyle.Focus, CheckboxSpan(terminal, 2, 1, "[").Style);
         Assert.Equal(TerminalStyle.Focus, SkillSpan(terminal, 2, 1).Style);
         Assert.Contains("0 of 3 selected; 0 to remove", terminal.Frames[2]);
     }
 
-    [Fact]
-    public void No_color_install_mode_uses_only_the_addition_marker()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Without_color_both_pickers_show_a_tick_with_the_checkbox_alone(bool uninstall)
     {
+        // A tick means one thing throughout a checklist, so nothing is needed beside the
+        // checkbox, and there is no color left for a legend to explain.
         var terminal = new FakeTerminal { SupportsColor = false };
         terminal.Press(ConsoleKey.A, ConsoleKey.C, ConsoleKey.Spacebar, ConsoleKey.Enter);
 
-        var chosen = new SkillPicker(terminal).Choose(Items(3), Title);
+        var chosen = new SkillPicker(terminal)
+            .Choose(Items(3), Title, uninstall ? PickerMode.Uninstall : PickerMode.Install);
 
         Assert.Equal("skill-01", Assert.Single(chosen!));
-        Assert.Contains(">   [ ] skill-01", terminal.Frames[0]);
-        Assert.Contains("> + [X] skill-01", terminal.Frames[1]);
-        Assert.Contains("  + [X] skill-02", terminal.Frames[1]);
-        Assert.Contains("  + [X] skill-03", terminal.Frames[1]);
-        Assert.Contains("    [ ] skill-02", terminal.Frames[2]);
-        Assert.Contains("> + [X] skill-01", terminal.Frames[3]);
-        Assert.Contains("    [ ] skill-02", terminal.Frames[3]);
+        Assert.Contains("> [ ] skill-01", terminal.Frames[0]);
+        Assert.Contains("> [X] skill-01", terminal.Frames[1]);
+        Assert.Contains("  [X] skill-02", terminal.Frames[1]);
+        Assert.Contains("  [ ] skill-02", terminal.Frames[2]);
+        Assert.Contains("> [X] skill-01", terminal.Frames[3]);
+        Assert.Contains("  [ ] skill-02", terminal.Frames[3]);
         Assert.All(terminal.StyleEvents, style => Assert.Equal(TerminalStyle.Default, style));
         Assert.All(terminal.Frames, frame =>
         {
-            Assert.Contains("+ install", frame);
-            Assert.DoesNotContain("- remove", frame);
+            Assert.DoesNotContain("+ [", frame);
             Assert.DoesNotContain("- [", frame);
-            Assert.DoesNotContain("will install", frame);
-        });
-    }
-
-    [Fact]
-    public void No_color_uninstall_mode_uses_only_the_removal_marker()
-    {
-        var terminal = new FakeTerminal { SupportsColor = false };
-        terminal.Press(ConsoleKey.Spacebar, ConsoleKey.Spacebar, ConsoleKey.A, ConsoleKey.C, ConsoleKey.Enter);
-
-        var chosen = new SkillPicker(terminal).Choose(Items(3), Title, PickerMode.Uninstall);
-
-        Assert.Empty(chosen!);
-        Assert.Contains("> - [X] skill-01", terminal.Frames[1]);
-        Assert.Contains(">   [ ] skill-01", terminal.Frames[2]);
-        Assert.Contains("  - [X] skill-03", terminal.Frames[3]);
-        Assert.Contains("    [ ] skill-03", terminal.Frames[4]);
-        Assert.All(terminal.StyleEvents, style => Assert.Equal(TerminalStyle.Default, style));
-        Assert.All(terminal.Frames, frame =>
-        {
             Assert.DoesNotContain("+ install", frame);
-            Assert.DoesNotContain("> +", frame);
-            Assert.Contains("- remove", frame);
+            Assert.DoesNotContain("- remove", frame);
+            Assert.DoesNotContain("Blue X", frame);
         });
     }
 
@@ -1538,10 +1543,9 @@ public class SkillPickerTests
                 "One two three four five six seven eight nine ten.")], Title);
 
         var lines = terminal.Frames[0].Split(Environment.NewLine).Select(line => line.TrimEnd()).ToArray();
-        Assert.EndsWith("longer-skill - One two three four" + (color ? " five" : ""), lines[2]);
-        Assert.Equal(
-            new string(' ', color ? 6 : 8) + (color ? "six seven eight nine ten." : "five six seven eight nine ten."),
-            lines[3]);
+        // Rows start in the same column with and without color, so they wrap the same way.
+        Assert.EndsWith("longer-skill - One two three four five", lines[2]);
+        Assert.Equal(new string(' ', 6) + "six seven eight nine ten.", lines[3]);
         Assert.Equal(string.Empty, lines[4]);
         Assert.Equal("longer-skill", Assert.Single(selected!));
         AssertWithinWindow(terminal);
@@ -1560,14 +1564,17 @@ public class SkillPickerTests
             .ResizeWhileWaiting(windowHeight: 18, windowWidth: 46)
             .WaitWithoutKey(times: 2)
             .Press(ConsoleKey.Enter);
-        var focused = color ? "> [X] skill-24" : uninstall ? "> - [X] skill-24" : "> + [X] skill-24";
+        const string focused = "> [X] skill-24";
+        // Without color there is no legend line, so each page holds one more skill: all 24 fit
+        // on one page at 120x32, and the narrow window needs four pages rather than five.
+        var lastPage = color ? "page 5 of 5" : "page 4 of 4";
         terminal.BeforeOperation = operation =>
         {
             if (operation == nameof(FakeTerminal.ReadKey) && terminal.KeysRead.Count == 3)
             {
                 // Assert the resize is already visible BEFORE the next real key is consumed.
                 Assert.Equal(2, terminal.ViewportClears);
-                Assert.Contains("page 5 of 5", terminal.Screen);
+                Assert.Contains(lastPage, terminal.Screen);
                 Assert.Contains(focused, terminal.Screen);
                 Assert.Contains("(Press <space> to select, <enter> to accept)", terminal.Screen);
             }
@@ -1578,9 +1585,17 @@ public class SkillPickerTests
             uninstall ? PickerMode.Uninstall : PickerMode.Install);
 
         Assert.Equal(["skill-01", "skill-24"], chosen!);
-        Assert.Contains("page 2 of 2", terminal.Frames[3]);
+        if (color)
+        {
+            Assert.Contains("page 2 of 2", terminal.Frames[3]);
+        }
+        else
+        {
+            Assert.DoesNotContain("page", terminal.Frames[3]);
+        }
+
         Assert.Equal((46, 18), terminal.FrameSizes[4]);
-        Assert.Contains("page 5 of 5", terminal.Frames[4]);
+        Assert.Contains(lastPage, terminal.Frames[4]);
         Assert.Contains(focused, terminal.Frames[4]);
         Assert.DoesNotContain("Package.24", terminal.Frames[4]);
         Assert.Equal(color ? TerminalStyle.Focus : TerminalStyle.Default,

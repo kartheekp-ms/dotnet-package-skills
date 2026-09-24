@@ -176,7 +176,6 @@ internal sealed class FakeTerminal(int windowHeight = 18, int windowWidth = 100)
             {
                 TerminalStyle.Focus => ConsoleColor.Blue,
                 TerminalStyle.Selected => ConsoleColor.Blue,
-                TerminalStyle.Remove => ConsoleColor.Red,
                 TerminalStyle.Muted => ConsoleColor.DarkGray,
                 _ => ConsoleColor.Gray,
             };

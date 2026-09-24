@@ -282,22 +282,18 @@ internal sealed class SkillPicker(ITerminal terminal)
         {
             var entry = layout.Entries[index];
             var isSelected = selected.Contains(index);
-            var pendingRemoval = mode == PickerMode.Uninstall && isSelected;
-            var pendingInstall = mode == PickerMode.Install && isSelected;
             var rowStyle = index == cursor ? TerminalStyle.Focus : TerminalStyle.Default;
-            var bracketStyle = pendingRemoval ? TerminalStyle.Remove : rowStyle;
             var offset = page.Scrollable ? scroll[index] : 0;
             var rows = page.Scrollable ? page.VisibleRows : entry.Height;
-            var marker = pendingRemoval ? '-' : pendingInstall ? '+' : ' ';
             // Continuations are wider than the space after the name, so scroll them below
             // the fixed skill row rather than placing one into its narrower first-line slot.
             WriteRow(
                 layout, frameTop, ref height,
                 new Span(index == cursor ? ">" : " ", rowStyle),
-                new Span(layout.SupportsColor ? " " : $" {marker} ", rowStyle),
-                new Span("[", bracketStyle),
+                new Span(" ", rowStyle),
+                new Span("[", rowStyle),
                 new Span(isSelected ? "X" : " ", isSelected ? TerminalStyle.Selected : rowStyle),
-                new Span("]", bracketStyle),
+                new Span("]", rowStyle),
                 new Span($" {entry.Label}", rowStyle),
                 new Span($" - {entry.Description[0]}", rowStyle));
             for (var line = 1; line < rows; line++)

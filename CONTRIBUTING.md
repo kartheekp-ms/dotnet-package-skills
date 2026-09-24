@@ -162,18 +162,17 @@ notation for paging, select-all, clear-all, cancel, and description scrolling, b
 keyboard-help line with `Press`. Wrap help rather than clipping away the keys. Only advertise
 paging and scrolling when they are useful.
 
-**Focus, checked state, and removal are separate cues.** The focused skill's text and all wrapped
-description lines are blue. A checked item has a blue uppercase `X`; names do not become green or
-red because of selection. In the uninstall picker, a ticked row's `[` and `]` turn red, even when
-the rest of the row is focused blue; the install picker has no removal cue, because it can't
-remove anything. The summary counts ticked skills, and the uninstall summary also says how many
-will go. No-color terminals use a compact `+` (install) or `-` (remove) marker instead; respect
+**Focus and checked state are the only cues.** The focused skill's text and all wrapped
+description lines are blue. A checked item has a blue uppercase `X` in both pickers; names and
+brackets do not change color because of selection. Neither picker marks what a tick does: each
+does one thing, so the title and the summary say it, and the uninstall summary also says how many
+will go. No-color terminals show `>` and `[X]` with no extra marker and no legend; respect
 `NO_COLOR`. A dedicated status column would take space away from descriptions.
 
 **A tick means install in one picker and remove in the other.** Neither starts with anything
 ticked, so pressing enter without touching anything changes nothing in both. `PickerMode` carries
-the difference: the summary, the legend, and the removal cue. The uninstall list comes from the
-manifest, so a skill someone wrote by hand is never offered for deletion.
+the difference, which shows only in the summary; the caller supplies the title. The uninstall list
+comes from the manifest, so a skill someone wrote by hand is never offered for deletion.
 
 **The picker owns the terminal, so it has to hand it back.** `Choose` hides the cursor and takes
 Ctrl+C as input, and restores both in a `finally`. Ctrl+C is why: left to the runtime it ends the
@@ -298,7 +297,7 @@ artifacts\terminal-venv\Scripts\python.exe tests\terminal\verify_picker.py `
 ```
 
 Rendered frames and raw terminal output are saved under the supplied artifacts directory.
-The suite checks descriptions, action/focus colors, no-color markers, variable-height pagination,
+The suite checks descriptions, focus and checked colors, no-color rendering, variable-height pagination,
 scrolling, resize, confirm/cancel, dry runs, ownership preservation, the add-only install
 checklist and its pre-flight stops, `uninstall --stale`, the two-versions stop, the rejected
 `--json` option, and the manifest's bytes.

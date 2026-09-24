@@ -244,10 +244,9 @@ The live checklist is displayed at the top of a temporary terminal screen, separ
 | Visual cue | Meaning |
 | --- | --- |
 | Blue row text | Keyboard focus, including the skill name and wrapped description lines. |
-| Blue `X` | Checked item: install in the install picker, or remove in the uninstall picker. |
-| Red `[` and `]` | Marked for removal, in the uninstall picker only. Brackets stay red even when the focused row's other text is blue. |
-| Normal name/description text | Item is not focused; selection does not turn its name green or red. |
-| `+` / `-` when color is disabled | Marked for installation/removal. `NO_COLOR` is honored. |
+| Blue `X` | Checked item: install in the install picker, or remove in the uninstall picker. Each picker does one thing, so a checked row looks the same in both, and the title and summary say what a check does. |
+| Normal name/description text | Item is not focused; selection does not change the color of its name or brackets. |
+| `>` and `[X]` when color is disabled | Focus and checked state, with no other marker and no color legend. `NO_COLOR` is honored. |
 
 | Key | Behavior |
 | --- | --- |
@@ -319,7 +318,7 @@ Which skills should be uninstalled?
 (Press <space> to select, <enter> to accept)
 (Press <up>/<down> to move, <Home>/<End> for first/last)
 (Press <a> to select all, <c> to clear all, <Esc>/<q>/<Ctrl+C> to cancel)
-Blue X: selected Red brackets: remove
+Blue X: selected
 ```
 
 Accepting removes only the checked skill. If ownership changes while the picker is open or while waiting for another operation, acceptance fails without applying that stale selection. A missing installed `SKILL.md` does not prevent removing its tracked folder. With no tracked skills, the command succeeds without opening a picker:
