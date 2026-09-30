@@ -102,8 +102,8 @@ Run `install` again whenever your packages change; there's no separate update co
 | If you've... | `install`... |
 | --- | --- |
 | Added a package that ships skills | Copies its skills. |
-| Upgraded or downgraded a package | Replaces its skills with those of the new version, and removes the ones that the new version no longer ships. |
-| Removed a package | Keeps its skills, and lists them as in the following example. To remove them, see [Remove stale skills](#remove-stale-skills). |
+| Upgraded or downgraded a package | Replaces its skills with those of the new version, and removes the ones that the new version no longer ships. You don't need to run `uninstall --stale`. |
+| Removed a package | Keeps its skills, and lists them as in the following example. To remove them, run `uninstall --stale`, as described in [Remove stale skills](#remove-stale-skills). |
 | Changed nothing | Copies each package's skills again, replacing the installed copies. |
 
 ```output
@@ -120,7 +120,7 @@ With `--package`, `install` does the same for the packages that you name, and le
 
 The skills folder holds the skills of only one version of each package. If the target references a package at more than one version, or `--package` names more than one, `install` stops and names the versions. [Central Package Management](https://learn.microsoft.com/nuget/consume-packages/central-package-management) keeps all the projects in a repository on one version of each package.
 
-Skill names are compared without regard to case. If two packages ship a skill with the same name, only one of them is copied. `install` also never replaces a tracked skill with another package's skill, or overwrites a folder that it didn't install. It skips such skills, and lists them in the report under `Warning:`. To give a skill name to another package, first remove the tracked skill, for example with `uninstall --package <ID>`.
+Each tracked skill belongs to the package that it was copied from, and changing one package's version never removes or replaces another package's skills. Skill names are compared without regard to case. If two packages ship a skill with the same name, only one of them is copied. `install` also never overwrites a folder that it didn't install. It lists the skills that it skips in the report under `Warning:`. If a package moves to a version that no longer ships a skill, and another package ships a skill with that name, `install` stops without changing anything, instead of handing the name to the other package. Run the `uninstall --package <ID>` command that the error suggests, and then run `install` again to copy the other package's skill.
 
 ### Remove skills
 
