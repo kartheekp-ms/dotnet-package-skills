@@ -296,9 +296,11 @@ class PickerRegression(unittest.TestCase):
             args += ["--global-packages", str(self.cache)]
             if self.target is not None:
                 args += ["--target", str(self.target)]
-            else:
-                for package in packages or ["Demo.Alpha@1.0.0", "Demo.Beta@2.0.0"]:
-                    args += ["--package", package]
+            selected = packages
+            if selected is None and self.target is None:
+                selected = ["Demo.Alpha@1.0.0", "Demo.Beta@2.0.0"]
+            for package in selected or []:
+                args += ["--package", package]
         elif "--stale" in extra and self.target is not None:
             args += ["--target", str(self.target)]
         return args + list(extra)
@@ -452,6 +454,124 @@ class PickerRegression(unittest.TestCase):
         restore()
         return project_file, project_xml, beta_reference, restore
 
+    def test_bare_package_id_resolves_from_an_explicit_target_when_untracked(self):
+        self.prepare_project()
+        before = snapshot(self.destination)
+
+        listed = self.cli("list", packages=["Demo.Alpha"]).stdout
+        self.assertIn("alpha-01", listed)
+        self.assertNotIn("beta-01", listed)
+        self.assertEqual(before, snapshot(self.destination))
+
+        preview = self.cli("install", "--dry-run", packages=["Demo.Alpha"]).stdout
+        self.assertIn("Would copy 15 skills:", preview)
+        self.assertEqual(before, snapshot(self.destination))
+
+        installed = self.cli("install", packages=["Demo.Alpha"]).stdout
+        self.assertIn("Copied 15 skills:", installed)
+        self.assertEqual({f"alpha-{number:02}" for number in range(1, 16)}, self.installed())
+        self.assertEqual("1.0.0", self.manifest_packages()["demo.alpha"]["version"])
+
+    def test_bare_package_id_resolves_from_an_auto_detected_target_when_untracked(self):
+        project_file, _, _, _ = self.prepare_project()
+        auto_target = self.root / "Auto.slnx"
+        auto_target.write_text(
+            '<Solution><Project Path="My App/App.csproj" /></Solution>',
+            encoding="utf-8",
+        )
+        shutil.copy(project_file.parent / "NuGet.Config", self.root / "NuGet.Config")
+        self.target = None
+
+        installed = self.cli("install", packages=["Demo.Beta"]).stdout
+
+        self.assertIn("Copied 10 skills:", installed)
+        self.assertEqual({f"beta-{number:02}" for number in range(1, 11)}, self.installed())
+        self.assertEqual("2.0.0", self.manifest_packages()["demo.beta"]["version"])
+
+    def test_bare_package_id_prefers_the_manifest_and_uninstall_stays_manifest_based(self):
+        self.prepare_project()
+        older = self.cache / "demo.alpha" / "0.9.0" / "skills" / "alpha-old"
+        older.mkdir(parents=True)
+        (older / "SKILL.md").write_text(
+            "---\ndescription: Guidance from the tracked older package.\n---\n",
+            encoding="utf-8",
+        )
+        self.cli("install", packages=["Demo.Alpha@0.9.0"])
+
+        listed = self.cli("list", packages=["Demo.Alpha"]).stdout
+
+        self.assertIn("alpha-old", listed)
+        self.assertNotIn("alpha-01", listed)
+        self.assertEqual("0.9.0", self.manifest_packages()["demo.alpha"]["version"])
+        removed = self.cli("uninstall", "--package", "Demo.Alpha").stdout
+        self.assertIn("Removed 1 skill:", removed)
+        self.assertEqual({}, self.manifest_packages())
+        self.assertTrue((self.destination / "team-owned" / "SKILL.md").is_file())
+
+    def test_bare_package_id_without_a_manifest_or_target_requests_an_exact_version(self):
+        before = snapshot(self.destination)
+
+        result = self.cli("list", packages=["Demo.Alpha"], expected=1)
+
+        self.assertEqual("", result.stdout)
+        self.assertIn("No solution or project found", result.stderr)
+        self.assertIn("ID@VERSION", result.stderr)
+        self.assertEqual(before, snapshot(self.destination))
+
+    def test_bare_package_id_reports_not_found_and_ambiguous_target_versions(self):
+        version_two = self.cache / "demo.alpha" / "2.0.0" / "skills" / "alpha-v2"
+        version_two.mkdir(parents=True)
+        (version_two / "SKILL.md").write_text(
+            "---\ndescription: Guidance from Alpha 2.0.\n---\n",
+            encoding="utf-8",
+        )
+        project_file, _, _, restore = self.prepare_project()
+
+        missing = self.cli("list", packages=["Missing.Package"], expected=1)
+        self.assertIn("Missing.Package", missing.stderr)
+        self.assertIn(str(self.target), missing.stderr)
+        self.assertIn("ID@VERSION", missing.stderr)
+
+        other = project_file.parent / "Other" / "Other.csproj"
+        other.parent.mkdir()
+        other.write_text(
+            '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
+            "<TargetFramework>net10.0</TargetFramework><NuGetAudit>false</NuGetAudit>"
+            '</PropertyGroup><ItemGroup>'
+            '<PackageReference Include="Demo.Alpha" Version="2.0.0" />'
+            "</ItemGroup></Project>",
+            encoding="utf-8",
+        )
+        self.target.write_text(
+            '<Solution><Project Path="App.csproj" /><Project Path="Other/Other.csproj" /></Solution>',
+            encoding="utf-8",
+        )
+        restore()
+        restored_other = subprocess.run(
+            [
+                "dotnet", "restore", str(other),
+                "--configfile", str(project_file.parent / "NuGet.Config"),
+                "--nologo", "--verbosity", "quiet",
+            ],
+            cwd=project_file.parent,
+            env=self.environment,
+            capture_output=True,
+            encoding="utf-8",
+            timeout=60,
+        )
+        self.assertEqual(0, restored_other.returncode, restored_other.stdout + restored_other.stderr)
+
+        ambiguous = self.cli("list", packages=["Demo.Alpha"], expected=1)
+        self.assertIn("1.0.0", ambiguous.stderr)
+        self.assertIn("2.0.0", ambiguous.stderr)
+        self.assertIn("Narrow --target", ambiguous.stderr)
+        self.assertIn("ID@VERSION", ambiguous.stderr)
+
+        self.target = self.root / "missing.sln"
+        exact = self.cli("list", packages=["Demo.Alpha@1.0.0"]).stdout
+        self.assertIn("alpha-01", exact)
+        self.assertNotIn("alpha-v2", exact)
+
     def test_restored_solution_keeps_unreferenced_skills_until_uninstall_stale(self):
         project_file, project_xml, beta_reference, restore = self.prepare_project()
         listed = self.cli("list").stdout
@@ -484,7 +604,10 @@ class PickerRegression(unittest.TestCase):
                     "10 installed skills belong to a package that the target no longer references:",
                     result.stdout)
                 self.assertIn("  beta-10 (demo.beta 2.0.0)", result.stdout)
-                self.assertIn(f"Run '{self.suggested('--stale', with_target=True)}' to remove them.", result.stdout)
+                self.assertIn(
+                    "Use uninstall with --stale to remove skills that no longer match the project.",
+                    result.stdout,
+                )
                 self.assertNotIn("Removed", result.stdout)
                 self.assertEqual(before, snapshot(self.destination))
 
@@ -509,7 +632,10 @@ class PickerRegression(unittest.TestCase):
         self.assertEqual(1, terminal.exit_status())
         self.assertNotIn("Which skills should", terminal.text)
         self.assert_shown("10 installed skills don't match the target", terminal)
-        self.assert_shown(f"Run '{self.suggested('--stale', with_target=True)}' first", terminal)
+        self.assert_shown(
+            "Use uninstall with --stale to remove skills that no longer match the project.",
+            terminal,
+        )
         self.assertEqual(before, snapshot(self.destination))
 
         terminal = self.terminal("uninstall", "--stale").ready()
@@ -798,7 +924,10 @@ class PickerRegression(unittest.TestCase):
         self.assertEqual(1, terminal.exit_status())
         self.assertNotIn("Which skills should", terminal.text)
         self.assert_shown("Demo.Beta 2.0.0 is already installed", terminal)
-        self.assert_shown(f"Run '{self.suggested('--package Demo.Beta')}' first", terminal)
+        self.assert_shown(
+            "Use uninstall with --package to remove skills for the conflicting packages",
+            terminal,
+        )
         self.assertEqual(before, snapshot(self.destination))
 
         self.cli("uninstall", "--package", "Demo.Beta")
@@ -822,7 +951,10 @@ class PickerRegression(unittest.TestCase):
                 self.assertIn(
                     "Demo.Alpha 1.1.0 no longer ships the installed skill 'shared-skill', "
                     "and Demo.Beta 2.0.0 ships a skill with that name", result.stderr)
-                self.assertIn(f"Run '{self.suggested('--package Demo.Alpha')}' first", result.stderr)
+                self.assertIn(
+                    "Use uninstall with --package to remove skills for the conflicting packages",
+                    result.stderr,
+                )
                 self.assertEqual("", result.stdout)
                 self.assertEqual(before, snapshot(self.destination))
 
@@ -1420,10 +1552,10 @@ class PickerRegression(unittest.TestCase):
         self.cli("list")
         self.assertEqual(before, snapshot(self.destination))
 
-    def test_manifest_metadata_cannot_inject_terminal_controls_into_human_reports(self):
+    def test_invalid_manifest_metadata_cannot_inject_terminal_controls_or_change_files(self):
         self.add_shared_skills()
         self.cli("install")
-        original = self.manifest.read_text(encoding="utf-8")
+        original = self.manifest.read_bytes()
         controls = (
             "\x1b]52;c;ZWNobyBleGFtcGxl\x07",
             "\x1b]52;c;ZWNobyBleGFtcGxl\x1b\\",
@@ -1434,15 +1566,19 @@ class PickerRegression(unittest.TestCase):
             damaged["packages"]["demo.alpha"]["version"] += control
             self.manifest.write_text(json.dumps(damaged), encoding="utf-8")
             before = snapshot(self.destination)
-            for verb, packages, expected in (
-                ("uninstall", None, "alpha-01 (demo.alpha 1.0.0"),
-                ("install", ["Demo.Beta@2.0.0"], "managed for demo.alpha 1.0.0"),
+            for verb, packages in (
+                ("uninstall", None),
+                ("install", ["Demo.Beta@2.0.0"]),
             ):
                 with self.subTest(verb=verb, control=ascii(control)):
-                    result = self.cli(verb, "--dry-run", packages=packages)
-                    self.assert_plain_output(result.stdout)
-                    self.assertIn(expected, result.stdout)
+                    result = self.cli(verb, "--dry-run", packages=packages, expected=1)
+                    self.assertEqual("", result.stdout)
+                    self.assert_plain_output(result.stderr)
+                    self.assertIn("Could not read the install manifest", result.stderr)
+                    self.assertIn("must be an exact NuGet version", result.stderr)
+                    self.assertNotIn("ZWNobyBleGFtcGxl", result.stderr)
                     self.assertEqual(before, snapshot(self.destination))
+            self.manifest.write_bytes(original)
         result = self.cli("uninstall")
         self.assert_plain_output(result.stdout)
         self.assertIn("Removed 26 skills", result.stdout)
@@ -1456,7 +1592,7 @@ class PickerRegression(unittest.TestCase):
         self.assertEqual("", result.stdout)
         self.assert_plain_output(result.stderr)
         self.assertIn("error:", result.stderr)
-        self.assertIn("Id@Version", result.stderr)
+        self.assertIn("not a valid package id", result.stderr)
         self.assertEqual(before, snapshot(self.destination))
 
     def test_parser_diagnostics_cannot_emit_controls_on_either_output_stream(self):

@@ -299,8 +299,9 @@ artifacts\terminal-venv\Scripts\python.exe tests\terminal\verify_picker.py `
 Rendered frames and raw terminal output are saved under the supplied artifacts directory.
 The suite checks descriptions, focus and checked colors, no-color rendering, variable-height pagination,
 scrolling, resize, confirm/cancel, dry runs, ownership preservation, the add-only install
-checklist and its pre-flight stops, `uninstall --stale`, the two-versions stop, the rejected
-`--json` option, and the manifest's bytes.
+checklist and its pre-flight stops, bare package-ID resolution from manifests and explicit or
+auto-detected targets, `uninstall --stale`, the two-versions stop, the rejected `--json` option,
+and the manifest's bytes.
 The duplicate-frame regressions also feed the real terminal output through an xterm emulator
 that models normal-buffer text reflow and alternate screens; a clipped-cell mock alone misses
 the host behavior that originally left stale headings in scrollback.
