@@ -405,6 +405,38 @@ class PickerRegression(unittest.TestCase):
         self.assertIn("Removed 25 skills", self.cli("uninstall").stdout)
         self.assertEqual(before, snapshot(self.destination))
 
+    def test_install_reuses_an_empty_unmanaged_skill_directory_without_overwriting_content(self):
+        empty = self.destination / "alpha-01"
+        empty.mkdir()
+        occupied = self.destination / "alpha-02"
+        occupied.mkdir()
+        handwritten = occupied / "notes.txt"
+        handwritten.write_text("Keep this user-authored content.\n", encoding="utf-8")
+        before = snapshot(self.destination)
+
+        preview = self.cli("install", "--dry-run", packages=["Demo.Alpha@1.0.0"]).stdout
+
+        self.assertIn("Would copy 14 skills:", preview)
+        self.assertIn("Warning: skipped 1 colliding skill:", preview)
+        self.assertIn("alpha-02 (Demo.Alpha 1.0.0)", preview)
+        self.assertIn("the destination folder already exists and is not managed by this tool", preview)
+        self.assertEqual(before, snapshot(self.destination))
+        self.assertTrue(empty.is_dir())
+        self.assertEqual([], list(empty.iterdir()))
+
+        installed = self.cli("install", packages=["Demo.Alpha@1.0.0"]).stdout
+
+        expected = {f"alpha-{number:02}" for number in range(1, 16)} - {"alpha-02"}
+        self.assertIn("Copied 14 skills:", installed)
+        self.assertIn("Warning: skipped 1 colliding skill:", installed)
+        self.assertEqual(expected, self.installed())
+        self.assertTrue((empty / "SKILL.md").is_file())
+        self.assertEqual(
+            "Keep this user-authored content.\n",
+            handwritten.read_text(encoding="utf-8"),
+        )
+        self.assertNotIn("alpha-02", self.installed())
+
     def prepare_project(self):
         feed = self.root / "local feed"
         feed.mkdir()
