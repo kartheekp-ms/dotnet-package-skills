@@ -520,6 +520,30 @@ class PickerRegression(unittest.TestCase):
         self.assertEqual({f"beta-{number:02}" for number in range(1, 11)}, self.installed())
         self.assertEqual("2.0.0", self.manifest_packages()["demo.beta"]["version"])
 
+    def test_relative_global_packages_override_stays_relative_to_the_invocation_directory(self):
+        self.prepare_project()
+        absolute_cache = self.cache
+        self.cache = self.cache.relative_to(self.root)
+
+        exact = self.cli("list", packages=["Demo.Alpha@1.0.0"]).stdout
+        self.assertIn(f"NuGet global-packages directory: {absolute_cache}", exact)
+        self.assertIn("alpha-01", exact)
+
+        target = self.cli("list").stdout
+        self.assertIn(f"NuGet global-packages directory: {absolute_cache}", target)
+        self.assertIn("alpha-01", target)
+        self.assertIn("beta-01", target)
+
+        resolved = self.cli("list", packages=["Demo.Alpha"]).stdout
+        self.assertIn(f"NuGet global-packages directory: {absolute_cache}", resolved)
+        self.assertIn("alpha-01", resolved)
+        self.assertNotIn("beta-01", resolved)
+
+        self.cli("install", packages=["Demo.Alpha@1.0.0"])
+        manifest_resolved = self.cli("list", packages=["Demo.Alpha"]).stdout
+        self.assertIn(f"NuGet global-packages directory: {absolute_cache}", manifest_resolved)
+        self.assertIn("alpha-01", manifest_resolved)
+
     def test_bare_package_id_prefers_the_manifest_and_uninstall_stays_manifest_based(self):
         self.prepare_project()
         older = self.cache / "demo.alpha" / "0.9.0" / "skills" / "alpha-old"
@@ -727,6 +751,64 @@ class PickerRegression(unittest.TestCase):
                 result = self.cli("uninstall", "--stale", *flags, expected=1)
                 self.assertIn("No solution or project found", result.stderr)
                 self.assertEqual(before, snapshot(self.destination))
+
+    def test_incomplete_package_graph_cannot_make_stale_uninstall_remove_everything(self):
+        self.cli("install", packages=["Demo.Alpha@1.0.0"])
+        before = snapshot(self.destination)
+        self.target = self.root / "App.csproj"
+        self.target.write_text(
+            '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
+            '<TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>',
+            encoding="utf-8",
+        )
+        shim = self.root / "dotnet shim"
+        shim.mkdir()
+        payload = json.dumps(
+            {"version": 1, "projects": [{"path": str(self.target).replace("\\", "/")}]},
+            separators=(",", ":"),
+        )
+        source = self.root / "dotnet shim source"
+        source.mkdir()
+        project = source / "dotnet.csproj"
+        project.write_text(
+            '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
+            '<OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework>'
+            '<AssemblyName>dotnet</AssemblyName><UseAppHost>true</UseAppHost>'
+            '</PropertyGroup></Project>',
+            encoding="utf-8",
+        )
+        (source / "Program.cs").write_text(
+            'using System;\n'
+            'Console.Out.Write(Environment.GetEnvironmentVariable("DPS_FAKE_DOTNET_OUTPUT"));',
+            encoding="utf-8",
+        )
+        build = subprocess.run(
+            ["dotnet", "build", str(project), "-c", "Release", "-o", str(shim),
+             "--nologo", "--verbosity", "quiet"],
+            cwd=source,
+            env=self.environment,
+            capture_output=True,
+            encoding="utf-8",
+            timeout=120,
+        )
+        self.assertEqual(0, build.returncode, build.stdout + build.stderr)
+        self.environment["DPS_FAKE_DOTNET_OUTPUT"] = payload
+        self.environment["PATH"] = str(shim) + os.pathsep + self.environment["PATH"]
+
+        for flags in (["--dry-run"], []):
+            with self.subTest(flags=flags):
+                result = self.cli("uninstall", "--stale", *flags, expected=1)
+                self.assertEqual("", result.stdout)
+                self.assertIn("restore", result.stderr.lower())
+                self.assertIn("App.csproj", result.stderr)
+                self.assertEqual(before, snapshot(self.destination))
+
+        terminal = self.terminal("uninstall", "--stale")
+        self.assertEqual(1, terminal.exit_status())
+        self.assertNotIn("Which skills should", terminal.text)
+        self.assertIn("restore", terminal.text.lower())
+        self.assert_shown("App.csproj", terminal)
+        self.assertEqual(before, snapshot(self.destination))
 
     def test_incomplete_target_discovery_fails_before_writes_in_all_install_modes(self):
         self.prepare_project()
@@ -944,6 +1026,48 @@ class PickerRegression(unittest.TestCase):
         )
         self.assertIn("for 3.0.", (self.destination / "beta-01" / "SKILL.md").read_text(encoding="utf-8"))
         self.assertTrue((self.destination / "team-owned" / "SKILL.md").exists())
+
+    def test_version_upgrade_stops_when_a_tracked_replacement_is_blocked_by_a_file(self):
+        for version, names in (("1.0.0", ["usage"]), ("2.0.0", ["usage", "new-skill"])):
+            for name in names:
+                directory = self.cache / "demo.upgrade" / version / "skills" / name
+                directory.mkdir(parents=True)
+                (directory / "SKILL.md").write_text(
+                    f"---\ndescription: {name} from {version}.\n---\n",
+                    encoding="utf-8",
+                )
+        self.cli("install", packages=["Demo.Upgrade@1.0.0"])
+        usage = self.destination / "usage"
+        shutil.rmtree(usage)
+        usage.write_text("team-owned blocking file\n", encoding="utf-8")
+        before = snapshot(self.destination)
+        manifest = self.manifest.read_bytes()
+
+        for flags in (["--dry-run"], []):
+            with self.subTest(flags=flags):
+                result = self.cli(
+                    "install", *flags, packages=["Demo.Upgrade@2.0.0"], expected=1)
+                self.assertEqual("", result.stdout)
+                self.assertIn("usage", result.stderr)
+                self.assertIn("2.0.0", result.stderr)
+                self.assertIn("uninstall with --package", result.stderr)
+                self.assertEqual(before, snapshot(self.destination))
+                self.assertEqual(manifest, self.manifest.read_bytes())
+
+        self.terminal_count += 1
+        terminal = Terminal(
+            self.command("install", packages=["Demo.Upgrade@2.0.0"]),
+            self.root,
+            self.environment,
+            OPTIONS.artifacts / "logs" / f"{self._testMethodName}-{self.terminal_count}",
+        )
+        self.addCleanup(terminal.close)
+        self.assertEqual(1, terminal.exit_status())
+        self.assert_shown("usage", terminal)
+        self.assert_shown("2.0.0", terminal)
+        self.assert_shown("uninstall with --package", terminal)
+        self.assertEqual(before, snapshot(self.destination))
+        self.assertEqual(manifest, self.manifest.read_bytes())
 
     def test_interactive_install_cannot_change_an_installed_package_version(self):
         self.cli("install", packages=["Demo.Beta@2.0.0"])
