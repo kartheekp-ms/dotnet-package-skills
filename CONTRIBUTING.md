@@ -302,8 +302,10 @@ scrolling, resize, confirm/cancel, dry runs, ownership preservation, the add-onl
 checklist and its pre-flight stops, bare package-ID resolution from manifests and explicit or
 auto-detected targets, safe reuse of empty unmanaged skill directories without overwriting
 nonempty ones, incomplete package-graph rejection before stale removal, invocation-relative
-global-packages overrides beside nested targets, version-upgrade collision integrity,
-`uninstall --stale`, the two-versions stop, the rejected `--json` option, and the manifest's bytes.
+global-packages overrides beside nested targets, version-upgrade collision integrity, missing root
+package graphs, explicit-false stale validation, reserved manifest-path rejection, interrupted
+terminal-sequence sanitizing, `uninstall --stale`, the two-versions stop, the rejected `--json`
+option, and the manifest's bytes.
 The duplicate-frame regressions also feed the real terminal output through an xterm emulator
 that models normal-buffer text reflow and alternate screens; a clipped-cell mock alone misses
 the host behavior that originally left stale headings in scrollback.

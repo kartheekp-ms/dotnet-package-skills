@@ -344,6 +344,39 @@ class PickerRegression(unittest.TestCase):
         self.addCleanup(terminal.close)
         return terminal
 
+    def use_fake_dotnet_output(self, payload):
+        shim = self.root / "dotnet shim"
+        if not shim.exists():
+            shim.mkdir()
+            source = self.root / "dotnet shim source"
+            source.mkdir()
+            project = source / "dotnet.csproj"
+            project.write_text(
+                '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
+                '<OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework>'
+                '<AssemblyName>dotnet</AssemblyName><UseAppHost>true</UseAppHost>'
+                '</PropertyGroup></Project>',
+                encoding="utf-8",
+            )
+            (source / "Program.cs").write_text(
+                'using System;\n'
+                'Console.Out.Write(Environment.GetEnvironmentVariable("DPS_FAKE_DOTNET_OUTPUT"));',
+                encoding="utf-8",
+            )
+            build = subprocess.run(
+                ["dotnet", "build", str(project), "-c", "Release", "-o", str(shim),
+                 "--nologo", "--verbosity", "quiet"],
+                cwd=source,
+                env=self.environment,
+                capture_output=True,
+                encoding="utf-8",
+                timeout=120,
+            )
+            self.assertEqual(0, build.returncode, build.stdout + build.stderr)
+            self.environment["PATH"] = str(shim) + os.pathsep + self.environment["PATH"]
+        self.environment["DPS_FAKE_DOTNET_OUTPUT"] = json.dumps(
+            payload, separators=(",", ":")) if not isinstance(payload, str) else payload
+
     def manifest_packages(self):
         if not self.manifest.exists():
             return {}
@@ -351,6 +384,15 @@ class PickerRegression(unittest.TestCase):
 
     def installed(self):
         return {name for package in self.manifest_packages().values() for name in package["skills"]}
+
+    def use_fresh_destination(self, label):
+        self.destination = self.root / label
+        self.destination.mkdir()
+        handwritten = self.destination / "team-owned"
+        handwritten.mkdir()
+        (handwritten / "SKILL.md").write_text(
+            "Do not change our own skill.\n", encoding="utf-8")
+        self.manifest = self.destination / ".dotnet-package-skills.json"
 
     def assert_shown(self, expected, terminal):
         """Checks text the console may have wrapped mid-word by ignoring all whitespace."""
@@ -761,39 +803,8 @@ class PickerRegression(unittest.TestCase):
             '<TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>',
             encoding="utf-8",
         )
-        shim = self.root / "dotnet shim"
-        shim.mkdir()
-        payload = json.dumps(
-            {"version": 1, "projects": [{"path": str(self.target).replace("\\", "/")}]},
-            separators=(",", ":"),
-        )
-        source = self.root / "dotnet shim source"
-        source.mkdir()
-        project = source / "dotnet.csproj"
-        project.write_text(
-            '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
-            '<OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework>'
-            '<AssemblyName>dotnet</AssemblyName><UseAppHost>true</UseAppHost>'
-            '</PropertyGroup></Project>',
-            encoding="utf-8",
-        )
-        (source / "Program.cs").write_text(
-            'using System;\n'
-            'Console.Out.Write(Environment.GetEnvironmentVariable("DPS_FAKE_DOTNET_OUTPUT"));',
-            encoding="utf-8",
-        )
-        build = subprocess.run(
-            ["dotnet", "build", str(project), "-c", "Release", "-o", str(shim),
-             "--nologo", "--verbosity", "quiet"],
-            cwd=source,
-            env=self.environment,
-            capture_output=True,
-            encoding="utf-8",
-            timeout=120,
-        )
-        self.assertEqual(0, build.returncode, build.stdout + build.stderr)
-        self.environment["DPS_FAKE_DOTNET_OUTPUT"] = payload
-        self.environment["PATH"] = str(shim) + os.pathsep + self.environment["PATH"]
+        self.use_fake_dotnet_output(
+            {"version": 1, "projects": [{"path": str(self.target).replace("\\", "/")}]})
 
         for flags in (["--dry-run"], []):
             with self.subTest(flags=flags):
@@ -808,6 +819,80 @@ class PickerRegression(unittest.TestCase):
         self.assertNotIn("Which skills should", terminal.text)
         self.assertIn("restore", terminal.text.lower())
         self.assert_shown("App.csproj", terminal)
+        self.assertEqual(before, snapshot(self.destination))
+
+    def test_missing_root_projects_cannot_make_stale_uninstall_remove_everything(self):
+        self.target = self.root / "App.csproj"
+        self.target.write_text(
+            '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>'
+            '<TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>',
+            encoding="utf-8",
+        )
+
+        for payload_number, payload in enumerate(({}, {"version": 1, "projects": None})):
+            for flags in (["--dry-run"], []):
+                with self.subTest(payload=payload, flags=flags):
+                    self.target = None
+                    self.use_fresh_destination(
+                        f"missing projects {payload_number} {'dry' if flags else 'actual'}")
+                    self.cli("install", packages=["Demo.Alpha@1.0.0"])
+                    before = snapshot(self.destination)
+                    self.target = self.root / "App.csproj"
+                    self.use_fake_dotnet_output(payload)
+                    result = self.cli("uninstall", "--stale", *flags, expected=1)
+                    self.assertEqual("", result.stdout)
+                    self.assertIn("projects", result.stderr.lower())
+                    self.assertIn("restore", result.stderr.lower())
+                    self.assertEqual(before, snapshot(self.destination))
+
+        self.target = None
+        self.use_fresh_destination("explicit empty projects")
+        self.cli("install", packages=["Demo.Alpha@1.0.0"])
+        before = snapshot(self.destination)
+        self.target = self.root / "App.csproj"
+        self.use_fake_dotnet_output({"version": 1, "projects": []})
+        preview = self.cli("uninstall", "--stale", "--dry-run").stdout
+        self.assertIn("Would remove 15 skills:", preview)
+        self.assertEqual(before, snapshot(self.destination))
+
+        self.target = None
+        self.use_fresh_destination("missing projects terminal")
+        self.cli("install", packages=["Demo.Alpha@1.0.0"])
+        before = snapshot(self.destination)
+        self.target = self.root / "App.csproj"
+        self.use_fake_dotnet_output({"version": 1, "projects": None})
+        terminal = self.terminal("uninstall", "--stale")
+        self.assertEqual(1, terminal.exit_status())
+        self.assertNotIn("Which skills should", terminal.text)
+        diagnostic = re.sub(r"\s+", "", terminal.text).lower()
+        self.assertIn("projects", diagnostic)
+        self.assertIn("restore", diagnostic)
+        self.assertEqual(before, snapshot(self.destination))
+
+    def test_explicit_false_stale_cannot_make_target_uninstall_everything(self):
+        for flags in (["--dry-run"], []):
+            with self.subTest(flags=flags):
+                self.target = None
+                self.use_fresh_destination(f"false stale {'dry' if flags else 'actual'}")
+                self.cli("install", packages=["Demo.Alpha@1.0.0"])
+                before = snapshot(self.destination)
+                self.target = self.root / "Missing.sln"
+                result = self.cli("uninstall", "--stale", "false", *flags, expected=1)
+                diagnostic = result.stdout + result.stderr
+                self.assertIn("--target", diagnostic)
+                self.assertIn("--stale", diagnostic)
+                self.assertEqual(before, snapshot(self.destination))
+
+        self.target = None
+        self.use_fresh_destination("false stale terminal")
+        self.cli("install", packages=["Demo.Alpha@1.0.0"])
+        before = snapshot(self.destination)
+        self.target = self.root / "Missing.sln"
+        terminal = self.terminal("uninstall", "--stale", "false")
+        self.assertEqual(1, terminal.exit_status())
+        self.assertNotIn("Which skills should", terminal.text)
+        self.assert_shown("--target", terminal)
+        self.assert_shown("--stale", terminal)
         self.assertEqual(before, snapshot(self.destination))
 
     def test_incomplete_target_discovery_fails_before_writes_in_all_install_modes(self):
@@ -974,6 +1059,67 @@ class PickerRegression(unittest.TestCase):
                         self.assertEqual(before, snapshot(self.destination))
             self.cli("list")
             self.assertEqual(before, snapshot(self.destination))
+
+    def test_manifest_filename_cannot_be_discovered_as_a_skill(self):
+        for number, name in enumerate(
+            (".dotnet-package-skills.json", ".DOTNET-PACKAGE-SKILLS.JSON"), start=1
+        ):
+            version = f"1.0.{number}"
+            directory = self.cache / "demo.reserved" / version / "skills" / name
+            directory.mkdir(parents=True)
+            (directory / "SKILL.md").write_text(
+                "---\ndescription: Must never replace the ownership manifest.\n---\n",
+                encoding="utf-8",
+            )
+            coordinate = f"Demo.Reserved@{version}"
+            for flags in ([], ["--dry-run"]):
+                with self.subTest(name=name, flags=flags):
+                    self.use_fresh_destination(
+                        f"reserved {number} {'dry' if flags else 'actual'}")
+                    before = snapshot(self.destination)
+                    result = self.cli("install", *flags, packages=[coordinate])
+                    self.assertIn("No bundled skills found.", result.stdout)
+                    self.assertEqual(before, snapshot(self.destination))
+
+        self.use_fresh_destination("reserved terminal")
+        before = snapshot(self.destination)
+        terminal = self.terminal(packages=["Demo.Reserved@1.0.1"])
+        self.assertEqual(0, terminal.exit_status())
+        self.assertNotIn("Which skills should", terminal.text)
+        self.assert_shown("No bundled skills found.", terminal)
+        self.assertEqual(before, snapshot(self.destination))
+
+        mixed = self.cache / "demo.reserved" / "2.0.0" / "skills"
+        reserved = mixed / ".dotnet-package-skills.json"
+        reserved.mkdir(parents=True)
+        (reserved / "SKILL.md").write_text(
+            "---\ndescription: Must never replace the ownership manifest.\n---\n",
+            encoding="utf-8",
+        )
+        ordinary = mixed / "ordinary-skill"
+        ordinary.mkdir()
+        (ordinary / "SKILL.md").write_text(
+            "---\ndescription: This safe sibling should still install.\n---\n",
+            encoding="utf-8",
+        )
+        self.use_fresh_destination("reserved mixed")
+        before = snapshot(self.destination)
+        preview = self.cli(
+            "install", "--dry-run", packages=["Demo.Reserved@2.0.0"]).stdout
+        self.assertIn("Would copy 1 skill:", preview)
+        self.assertIn("ordinary-skill", preview)
+        self.assertNotIn(".dotnet-package-skills.json", preview)
+        self.assertEqual(before, snapshot(self.destination))
+
+        installed = self.cli("install", packages=["Demo.Reserved@2.0.0"]).stdout
+        self.assertIn("Copied 1 skill:", installed)
+        self.assertIn("ordinary-skill", installed)
+        self.assertNotIn(".dotnet-package-skills.json", installed)
+        self.assertTrue(self.manifest.is_file())
+        self.assertEqual(
+            {"demo.reserved": {"version": "2.0.0", "skills": ["ordinary-skill"]}},
+            self.manifest_packages(),
+        )
 
     def test_current_owner_refresh_is_not_blocked_by_an_earlier_named_collision(self):
         self.add_shared_skills()
@@ -1749,6 +1895,24 @@ class PickerRegression(unittest.TestCase):
         self.assert_plain_output(result.stderr)
         self.assertIn("error:", result.stderr)
         self.assertIn("not a valid package id", result.stderr)
+        self.assertEqual(before, snapshot(self.destination))
+
+    def test_interrupted_terminal_sequences_cannot_expose_hidden_payloads(self):
+        before = snapshot(self.destination)
+        package = "before\x1b[31;\x1b]52;c;SECRET\x07after"
+
+        result = self.cli("install", packages=[package], expected=1)
+        self.assert_plain_output(result.stdout)
+        self.assert_plain_output(result.stderr)
+        self.assertNotIn("SECRET", result.stdout + result.stderr)
+        self.assertIn("beforeafter", result.stdout + result.stderr)
+        self.assertEqual(before, snapshot(self.destination))
+
+        terminal = self.terminal(packages=[package])
+        self.assertEqual(1, terminal.exit_status())
+        self.assertNotIn("SECRET", terminal.text)
+        self.assertNotIn("SECRET", "".join(terminal.raw))
+        self.assert_shown("beforeafter", terminal)
         self.assertEqual(before, snapshot(self.destination))
 
     def test_parser_diagnostics_cannot_emit_controls_on_either_output_stream(self):
