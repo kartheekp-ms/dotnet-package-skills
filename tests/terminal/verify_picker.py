@@ -295,14 +295,14 @@ class PickerRegression(unittest.TestCase):
         if verb != "uninstall":
             args += ["--global-packages", str(self.cache)]
             if self.target is not None:
-                args += ["--target", str(self.target)]
+                args += ["--source", str(self.target)]
             selected = packages
             if selected is None and self.target is None:
                 selected = ["Demo.Alpha@1.0.0", "Demo.Beta@2.0.0"]
             for package in selected or []:
                 args += ["--package", package]
         elif "--stale" in extra and self.target is not None:
-            args += ["--target", str(self.target)]
+            args += ["--source", str(self.target)]
         return args + list(extra)
 
     def cli(self, verb, *extra, packages=None, expected=0):
@@ -318,7 +318,7 @@ class PickerRegression(unittest.TestCase):
         """The uninstall command the tool suggests, with this fixture's target and destination."""
         command = f"dotnet-package-skills uninstall {arguments}"
         if with_target and self.target is not None:
-            command += f' --target "{self.target}"'
+            command += f' --source "{self.target}"'
         return command + f' --destination "{self.destination}"'
 
     def terminal(self, verb="install", *extra, packages=None, rows=24, columns=100, no_color=False,
@@ -688,7 +688,9 @@ class PickerRegression(unittest.TestCase):
     def test_restored_solution_keeps_unreferenced_skills_until_uninstall_stale(self):
         project_file, project_xml, beta_reference, restore = self.prepare_project()
         listed = self.cli("list").stdout
-        self.assertIn(f"Target:      {self.target}", listed)
+        self.assertIn(f"Source:      {self.target}", listed)
+        self.assertNotIn("Target:", listed)
+        self.assertNotIn("Destination:", listed)
         for name in self.names:
             self.assertIn(name, listed)
         terminal = self.terminal().ready()
@@ -725,7 +727,8 @@ class PickerRegression(unittest.TestCase):
                 self.assertEqual(before, snapshot(self.destination))
 
         preview = self.cli("uninstall", "--stale", "--dry-run").stdout
-        self.assertIn(f"Target:      {self.target}", preview)
+        self.assertIn(f"Source:      {self.target}", preview)
+        self.assertNotIn("Target:", preview)
         self.assertIn("Would remove 10 skills:", preview)
         self.assertEqual(before, snapshot(self.destination))
         self.assertIn("Removed 10 skills:", self.cli("uninstall", "--stale").stdout)
@@ -894,7 +897,7 @@ class PickerRegression(unittest.TestCase):
                 self.target = self.root / "Missing.sln"
                 result = self.cli("uninstall", "--stale", "false", *flags, expected=1)
                 diagnostic = result.stdout + result.stderr
-                self.assertIn("--target", diagnostic)
+                self.assertIn("--source", diagnostic)
                 self.assertIn("--stale", diagnostic)
                 self.assertEqual(before, snapshot(self.destination))
 
@@ -906,7 +909,7 @@ class PickerRegression(unittest.TestCase):
         terminal = self.terminal("uninstall", "--stale", "false")
         self.assertEqual(1, terminal.exit_status())
         self.assertNotIn("Which skills should", terminal.text)
-        self.assert_shown("--target", terminal)
+        self.assert_shown("--source", terminal)
         self.assert_shown("--stale", terminal)
         self.assertEqual(before, snapshot(self.destination))
 
