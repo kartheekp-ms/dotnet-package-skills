@@ -917,8 +917,8 @@ class PickerRegression(unittest.TestCase):
         self.prepare_project()
         self.cli("install")
         before = snapshot(self.destination)
-        # dotnet list package restores into NUGET_PACKAGES, which stays complete. The tool reads
-        # the folder that --global-packages names, which lacks a package, as a fallback folder can.
+        # Keep the restored graph and NUGET_PACKAGES complete, but point --global-packages
+        # at an incomplete copy, as can happen with a fallback folder.
         partial = self.root / "partial cache"
         shutil.copytree(self.cache, partial)
         self.cache = partial
@@ -942,25 +942,117 @@ class PickerRegression(unittest.TestCase):
         self.assertIn("resolved packages are missing", result.stderr)
         self.assertEqual(before, snapshot(self.destination))
 
-    def test_a_target_that_cannot_be_restored_is_reported_and_nothing_changes(self):
+    def test_changed_reference_uses_the_previous_graph_without_implicit_restore(self):
         project_file, project_xml, _, _ = self.prepare_project()
+        project_file.write_text(
+            project_xml.replace('Version="2.0.0"', 'Version="9.9.9"'), encoding="utf-8")
+        # The feed cannot satisfy the edited reference. An implicit restore would fail
+        # and rewrite obj; --no-restore must keep using the resolved 2.0.0 graph.
+        project_before = snapshot(project_file.parent)
+        restore_times = {
+            str(path.relative_to(project_file.parent)): path.stat().st_mtime_ns
+            for path in (project_file.parent / "obj").rglob("*") if path.is_file()
+        }
+        cache_before = snapshot(self.cache)
+
+        def assert_no_restore():
+            self.assertEqual(project_before, snapshot(project_file.parent))
+            self.assertEqual(restore_times, {
+                str(path.relative_to(project_file.parent)): path.stat().st_mtime_ns
+                for path in (project_file.parent / "obj").rglob("*") if path.is_file()
+            })
+            self.assertEqual(cache_before, snapshot(self.cache))
+            self.assertFalse((self.cache / "demo.beta" / "9.9.9").exists())
+
+        for verb, flags, summary in (
+            ("list", [], "Found 25 skills:"),
+            ("install", ["--dry-run"], "Would copy 25 skills:"),
+            ("install", [], "Copied 25 skills:"),
+        ):
+            with self.subTest(verb=verb, flags=flags):
+                self.use_fresh_destination(f"no restore {verb} {' '.join(flags) or 'plain'}")
+                before = snapshot(self.destination)
+                result = self.cli(verb, *flags)
+                self.assertIn(summary, result.stdout)
+                self.assertIn("alpha-01 (Demo.Alpha 1.0.0)", result.stdout)
+                self.assertIn("beta-10 (Demo.Beta 2.0.0)", result.stdout)
+                self.assertNotIn("9.9.9", result.stdout + result.stderr)
+                if verb == "list" or "--dry-run" in flags:
+                    self.assertEqual(before, snapshot(self.destination))
+                else:
+                    self.assertEqual(set(self.names), self.installed())
+                    self.assertEqual(
+                        {"demo.alpha": ["1.0.0"], "demo.beta": ["2.0.0"]},
+                        {name: sorted(entry["versions"]) for name, entry in self.manifest_packages().items()},
+                    )
+                    for name in self.names:
+                        package, version = ("demo.alpha", "1.0.0") if name.startswith("alpha") else (
+                            "demo.beta", "2.0.0")
+                        self.assertEqual(
+                            (self.cache / package / version / "skills" / name / "SKILL.md").read_bytes(),
+                            (self.destination / name / "SKILL.md").read_bytes(),
+                        )
+                    self.assertEqual(
+                        "Do not change our own skill.\n",
+                        (self.destination / "team-owned" / "SKILL.md").read_text(encoding="utf-8"),
+                    )
+                assert_no_restore()
+
+        before = snapshot(self.destination)
+        for flags in (["--dry-run"], [], ["-i"]):
+            with self.subTest(verb="uninstall", flags=flags):
+                result = self.cli("uninstall", "--stale", *flags)
+                self.assertIn("No stale skills were found.", result.stdout)
+                self.assertEqual(before, snapshot(self.destination))
+                assert_no_restore()
+
+        self.use_fresh_destination("no restore real console")
+        before = snapshot(self.destination)
+        terminal = self.terminal("install", "--dry-run", rows=50).ready()
+        terminal.press("a")
+        self.assertEqual(0, terminal.finish())
+        self.assert_shown("Would copy 25 skills:", terminal)
+        self.assert_shown("beta-10 (Demo.Beta 2.0.0)", terminal)
+        self.assertEqual(before, snapshot(self.destination))
+        assert_no_restore()
+
+        terminal = self.terminal().ready()
+        terminal.press(END, lambda: "beta-10" in terminal.focused, "last resolved Beta skill")
+        terminal.press(SPACE)
+        self.assertEqual(0, terminal.finish())
+        self.assertEqual({"beta-10"}, self.installed())
+        self.assertEqual(["2.0.0"], sorted(self.manifest_packages()["demo.beta"]["versions"]))
+        self.assertEqual(
+            (self.cache / "demo.beta" / "2.0.0" / "skills" / "beta-10" / "SKILL.md").read_bytes(),
+            (self.destination / "beta-10" / "SKILL.md").read_bytes(),
+        )
+        self.assertEqual(
+            "Do not change our own skill.\n",
+            (self.destination / "team-owned" / "SKILL.md").read_text(encoding="utf-8"),
+        )
+        assert_no_restore()
+
+    def test_missing_assets_reports_list_failure_and_nothing_changes(self):
+        project_file, _, _, _ = self.prepare_project()
         self.cli("install")
         before = snapshot(self.destination)
-        # The local feed has no 9.9.9, so the restore that dotnet list package runs fails. The
-        # tool reports what the SDK said and leaves restoring to the customer.
-        project_file.write_text(project_xml.replace('Version="2.0.0"', 'Version="9.9.9"'), encoding="utf-8")
+        assets = project_file.parent / "obj" / "project.assets.json"
+        assets.unlink()
+        project_before = snapshot(project_file.parent)
         for verb, flags in (
             ("install", []), ("install", ["--dry-run"]), ("install", ["-i"]),
-            ("list", []), ("uninstall", ["--stale"]),
+            ("list", []), ("uninstall", ["--stale"]), ("uninstall", ["--stale", "--dry-run"]),
         ):
             with self.subTest(verb=verb, flags=flags):
                 result = self.cli(verb, *flags, expected=1)
                 self.assertIn("package' failed with exit code", result.stderr)
-                self.assertIn("Restore failed", result.stderr)
+                self.assertRegex(result.stderr, r"(?i)assets")
                 self.assertIn("and then run this command again", result.stderr)
                 self.assertNotIn('"problems"', result.stderr)
                 self.assertEqual("", result.stdout)
                 self.assertEqual(before, snapshot(self.destination))
+                self.assertEqual(project_before, snapshot(project_file.parent))
+                self.assertFalse(assets.exists())
 
     def add_shared_skills(self):
         for package, version in (("demo.alpha", "1.0.0"), ("demo.beta", "2.0.0")):
