@@ -383,7 +383,10 @@ class PickerRegression(unittest.TestCase):
         return json.loads(self.manifest.read_text(encoding="utf-8-sig"))["packages"]
 
     def installed(self):
-        return {name for package in self.manifest_packages().values() for name in package["skills"]}
+        return {
+            name for package in self.manifest_packages().values()
+            for version in package["versions"].values() for name in version["skills"]
+        }
 
     def use_fresh_destination(self, label):
         self.destination = self.root / label
@@ -393,6 +396,18 @@ class PickerRegression(unittest.TestCase):
         (handwritten / "SKILL.md").write_text(
             "Do not change our own skill.\n", encoding="utf-8")
         self.manifest = self.destination / ".dotnet-package-skills.json"
+
+    def add_package_skills(self, package, version, *names):
+        root = self.cache / package.lower() / version
+        root.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            folder = root / "skills" / name
+            folder.mkdir(parents=True)
+            (folder / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: {package} {version} guidance.\n---\n",
+                encoding="utf-8",
+            )
+        return root
 
     def assert_shown(self, expected, terminal):
         """Checks text the console may have wrapped mid-word by ignoring all whitespace."""
@@ -433,8 +448,8 @@ class PickerRegression(unittest.TestCase):
             {
                 "version": 1,
                 "packages": {
-                    "demo.alpha": {"version": "1.0.0", "skills": [f"alpha-{n:02}" for n in range(1, 16)]},
-                    "demo.beta": {"version": "2.0.0", "skills": [f"beta-{n:02}" for n in range(1, 11)]},
+                    "demo.alpha": {"versions": {"1.0.0": {"skills": [f"alpha-{n:02}" for n in range(1, 16)]}}},
+                    "demo.beta": {"versions": {"2.0.0": {"skills": [f"beta-{n:02}" for n in range(1, 11)]}}},
                 },
             },
             json.loads(raw),
@@ -544,7 +559,7 @@ class PickerRegression(unittest.TestCase):
         installed = self.cli("install", packages=["Demo.Alpha"]).stdout
         self.assertIn("Copied 15 skills:", installed)
         self.assertEqual({f"alpha-{number:02}" for number in range(1, 16)}, self.installed())
-        self.assertEqual("1.0.0", self.manifest_packages()["demo.alpha"]["version"])
+        self.assertEqual(["1.0.0"], list(self.manifest_packages()["demo.alpha"]["versions"]))
 
     def test_bare_package_id_resolves_from_an_auto_detected_target_when_untracked(self):
         project_file, _, _, _ = self.prepare_project()
@@ -560,7 +575,7 @@ class PickerRegression(unittest.TestCase):
 
         self.assertIn("Copied 10 skills:", installed)
         self.assertEqual({f"beta-{number:02}" for number in range(1, 11)}, self.installed())
-        self.assertEqual("2.0.0", self.manifest_packages()["demo.beta"]["version"])
+        self.assertEqual(["2.0.0"], list(self.manifest_packages()["demo.beta"]["versions"]))
 
     def test_relative_global_packages_override_stays_relative_to_the_invocation_directory(self):
         self.prepare_project()
@@ -600,7 +615,7 @@ class PickerRegression(unittest.TestCase):
 
         self.assertIn("alpha-old", listed)
         self.assertNotIn("alpha-01", listed)
-        self.assertEqual("0.9.0", self.manifest_packages()["demo.alpha"]["version"])
+        self.assertEqual(["0.9.0"], list(self.manifest_packages()["demo.alpha"]["versions"]))
         removed = self.cli("uninstall", "--package", "Demo.Alpha").stdout
         self.assertIn("Removed 1 skill:", removed)
         self.assertEqual({}, self.manifest_packages())
@@ -616,7 +631,7 @@ class PickerRegression(unittest.TestCase):
         self.assertIn("ID@VERSION", result.stderr)
         self.assertEqual(before, snapshot(self.destination))
 
-    def test_bare_package_id_reports_not_found_and_ambiguous_target_versions(self):
+    def test_bare_package_id_reports_not_found_and_expands_all_target_versions(self):
         version_two = self.cache / "demo.alpha" / "2.0.0" / "skills" / "alpha-v2"
         version_two.mkdir(parents=True)
         (version_two / "SKILL.md").write_text(
@@ -659,11 +674,11 @@ class PickerRegression(unittest.TestCase):
         )
         self.assertEqual(0, restored_other.returncode, restored_other.stdout + restored_other.stderr)
 
-        ambiguous = self.cli("list", packages=["Demo.Alpha"], expected=1)
-        self.assertIn("1.0.0", ambiguous.stderr)
-        self.assertIn("2.0.0", ambiguous.stderr)
-        self.assertIn("Narrow --target", ambiguous.stderr)
-        self.assertIn("ID@VERSION", ambiguous.stderr)
+        expanded = self.cli("list", packages=["Demo.Alpha"])
+        self.assertEqual("", expanded.stderr)
+        self.assertIn("Found 16 skills:", expanded.stdout)
+        self.assertIn("multiple versions (1.0.0, 2.0.0)", expanded.stdout)
+        self.assertIn("alpha-v2", expanded.stdout)
 
         self.target = self.root / "missing.sln"
         exact = self.cli("list", packages=["Demo.Alpha@1.0.0"]).stdout
@@ -817,7 +832,7 @@ class PickerRegression(unittest.TestCase):
         terminal = self.terminal("uninstall", "--stale")
         self.assertEqual(1, terminal.exit_status())
         self.assertNotIn("Which skills should", terminal.text)
-        self.assertIn("restore", terminal.text.lower())
+        self.assert_shown("Restore or fix the target", terminal)
         self.assert_shown("App.csproj", terminal)
         self.assertEqual(before, snapshot(self.destination))
 
@@ -954,7 +969,7 @@ class PickerRegression(unittest.TestCase):
     def shared_owner(self):
         return next(
             package for package, entry in self.manifest_packages().items()
-            if "shared-skill" in entry["skills"]
+            if any("shared-skill" in version["skills"] for version in entry["versions"].values())
         )
 
     def test_package_filtered_picker_cannot_offer_or_remove_another_packages_shared_name(self):
@@ -966,10 +981,11 @@ class PickerRegression(unittest.TestCase):
         terminal.press(END, lambda: "beta-10" in terminal.focused, "last eligible Beta skill")
         self.assertNotIn("shared-skill", terminal.text)
         terminal.press("c")
-        self.assertEqual(0, terminal.finish())
+        self.assertEqual(1, terminal.finish())
         self.assertEqual(before, snapshot(self.destination))
         self.assertEqual("demo.alpha", self.shared_owner())
-        self.assertIn("Warning: skipped 1 colliding skill", terminal.text)
+        self.assertIn("Skipped 1 colliding skill", terminal.text)
+        self.assertIn("error:", terminal.text)
 
     def test_target_collision_preserves_ownership_until_explicit_uninstall(self):
         self.add_shared_skills()
@@ -982,8 +998,8 @@ class PickerRegression(unittest.TestCase):
         )
         restore()
 
-        result = self.cli("install").stdout
-        self.assertIn("Warning: skipped 1 colliding skill:", result)
+        result = self.cli("install", expected=1).stdout
+        self.assertIn("Skipped 1 colliding skill:", result)
         self.assertIn("  shared-skill (Demo.Beta 2.0.0)", result)
         self.assertIn("managed for demo.alpha 1.0.0", result)
         self.assertIn(
@@ -1019,13 +1035,14 @@ class PickerRegression(unittest.TestCase):
         self.cli("install")
         original = self.manifest.read_text(encoding="utf-8")
         duplicate = json.loads(original)
-        duplicate["packages"]["other.owner"] = {"version": "1.0.0", "skills": ["ALPHA-01"]}
+        duplicate["packages"]["other.owner"] = {"versions": {"1.0.0": {"skills": ["ALPHA-01"]}}}
         for damaged in (
             "{}",
             '{"version":1,"packages":{},"Packages":{}}',
             json.dumps(duplicate),
             original.replace('"demo.beta"', '"Demo.Alpha"'),
             '{"installed":[{"package":"Demo.Alpha","version":"1.0.0","skills":["alpha-01"]}]}',
+            '{"version":1,"packages":{"demo.alpha":{"version":"1.0.0","skills":["alpha-01"]}}}',
         ):
             self.manifest.write_text(damaged, encoding="utf-8")
             before = snapshot(self.destination)
@@ -1045,7 +1062,7 @@ class PickerRegression(unittest.TestCase):
         original = self.manifest.read_text(encoding="utf-8")
         for unsafe_name in ("...", ".. ", "team-owned.", "team-owned "):
             damaged = json.loads(original)
-            damaged["packages"]["unsafe.owner"] = {"version": "1.0.0", "skills": [unsafe_name]}
+            damaged["packages"]["unsafe.owner"] = {"versions": {"1.0.0": {"skills": [unsafe_name]}}}
             self.manifest.write_text(json.dumps(damaged), encoding="utf-8")
             before = snapshot(self.destination)
             for verb in ("install", "uninstall"):
@@ -1117,11 +1134,11 @@ class PickerRegression(unittest.TestCase):
         self.assertNotIn(".dotnet-package-skills.json", installed)
         self.assertTrue(self.manifest.is_file())
         self.assertEqual(
-            {"demo.reserved": {"version": "2.0.0", "skills": ["ordinary-skill"]}},
+            {"demo.reserved": {"versions": {"2.0.0": {"skills": ["ordinary-skill"]}}}},
             self.manifest_packages(),
         )
 
-    def test_current_owner_refresh_is_not_blocked_by_an_earlier_named_collision(self):
+    def test_current_owner_is_not_refreshed_when_any_new_candidate_collides(self):
         self.add_shared_skills()
         self.cli("install", packages=["Demo.Beta@2.0.0"])
         owned_source = self.cache / "demo.beta" / "2.0.0" / "skills" / "shared-skill" / "SKILL.md"
@@ -1135,12 +1152,12 @@ class PickerRegression(unittest.TestCase):
         self.assertEqual(0, terminal.finish(ESC))
         self.assertNotIn("Updated owner guidance.", (self.destination / "shared-skill" / "SKILL.md").read_text())
 
-        result = self.cli("install").stdout
+        result = self.cli("install", expected=1).stdout
         self.assertIn("  shared-skill (Demo.Beta 2.0.0)", result)
-        self.assertIn("  shared-skill (Demo.Alpha 1.0.0)", result.split("Warning: skipped")[1])
-        self.assertIn("which belongs to the current owner", result)
+        self.assertIn("  shared-skill (Demo.Alpha 1.0.0)", result.split("Skipped 2 colliding")[1])
+        self.assertIn("all candidates were skipped", result)
         self.assertEqual("demo.beta", self.shared_owner())
-        self.assertIn("Updated owner guidance.", (self.destination / "shared-skill" / "SKILL.md").read_text())
+        self.assertNotIn("Updated owner guidance.", (self.destination / "shared-skill" / "SKILL.md").read_text())
 
     def test_repeated_equivalent_coordinates_do_not_self_collide(self):
         result = self.cli(
@@ -1149,7 +1166,7 @@ class PickerRegression(unittest.TestCase):
         self.assertIn("Copied 15 skills:", result)
         self.assertNotIn("Warning", result)
         self.assertEqual(["demo.alpha"], list(self.manifest_packages()))
-        self.assertEqual("1.0.0", self.manifest_packages()["demo.alpha"]["version"])
+        self.assertEqual(["1.0.0"], list(self.manifest_packages()["demo.alpha"]["versions"]))
 
     def test_version_change_removes_dropped_skills_even_when_the_folder_is_already_gone(self):
         self.cli("install", packages=["Demo.Beta@2.0.0"])
@@ -1167,7 +1184,7 @@ class PickerRegression(unittest.TestCase):
         self.assertIn("Copied 9 skills:", result)
         self.assertIn("Removed 1 skill:\n  beta-10 (demo.beta 2.0.0)", result)
         self.assertEqual(
-            {"demo.beta": {"version": "3.0.0", "skills": [f"beta-{n:02}" for n in range(1, 10)]}},
+            {"demo.beta": {"versions": {"3.0.0": {"skills": [f"beta-{n:02}" for n in range(1, 10)]}}}},
             self.manifest_packages(),
         )
         self.assertIn("for 3.0.", (self.destination / "beta-01" / "SKILL.md").read_text(encoding="utf-8"))
@@ -1215,31 +1232,31 @@ class PickerRegression(unittest.TestCase):
         self.assertEqual(before, snapshot(self.destination))
         self.assertEqual(manifest, self.manifest.read_bytes())
 
-    def test_interactive_install_cannot_change_an_installed_package_version(self):
+    def test_interactive_install_can_add_a_disjoint_version_without_changing_installed_skills(self):
         self.cli("install", packages=["Demo.Beta@2.0.0"])
         newer = self.cache / "demo.beta" / "3.0.0" / "skills" / "beta-11"
         newer.mkdir(parents=True)
         (newer / "SKILL.md").write_text("---\ndescription: Only in 3.0.\n---\n", encoding="utf-8")
         before = snapshot(self.destination)
 
-        terminal = self.terminal(packages=["Demo.Beta@3.0.0"])
-        self.assertEqual(1, terminal.exit_status())
-        self.assertNotIn("Which skills should", terminal.text)
-        self.assert_shown("Demo.Beta 2.0.0 is already installed", terminal)
-        self.assert_shown(
-            "Use uninstall with --package to remove skills for the conflicting packages",
-            terminal,
-        )
+        terminal = self.terminal(packages=["Demo.Beta@3.0.0"]).ready()
+        self.assertIn("beta-11", terminal.focused)
+        self.assertEqual(0, terminal.finish(ESC))
         self.assertEqual(before, snapshot(self.destination))
 
-        self.cli("uninstall", "--package", "Demo.Beta")
         terminal = self.terminal(packages=["Demo.Beta@3.0.0"]).ready()
         self.assertIn("beta-11", terminal.focused)
         terminal.press(SPACE, lambda: "[X]" in terminal.focused, "the only 3.0 skill")
         self.assertEqual(0, terminal.finish())
-        self.assertEqual({"demo.beta": {"version": "3.0.0", "skills": ["beta-11"]}}, self.manifest_packages())
+        self.assertEqual(
+            {"demo.beta": {"versions": {
+                "2.0.0": {"skills": [f"beta-{n:02}" for n in range(1, 11)]},
+                "3.0.0": {"skills": ["beta-11"]},
+            }}},
+            self.manifest_packages(),
+        )
 
-    def test_a_version_change_that_would_hand_a_skill_to_another_package_stops(self):
+    def test_a_version_change_preserves_a_colliding_owner_and_installs_other_skills(self):
         self.add_shared_skills()
         self.cli("install", packages=["Demo.Alpha@1.0.0"])
         newer = self.cache / "demo.alpha" / "1.1.0" / "skills" / "alpha-01"
@@ -1247,49 +1264,62 @@ class PickerRegression(unittest.TestCase):
         (newer / "SKILL.md").write_text("---\ndescription: Alpha 1.1 drops shared-skill.\n---\n", encoding="utf-8")
         before = snapshot(self.destination)
         packages = ["Demo.Alpha@1.1.0", "Demo.Beta@2.0.0"]
-        for flags in ([], ["--dry-run"]):
+        for flags in (["--dry-run"], []):
             with self.subTest(flags=flags):
                 result = self.cli("install", *flags, packages=packages, expected=1)
                 self.assertIn(
-                    "Demo.Alpha 1.1.0 no longer ships the installed skill 'shared-skill', "
-                    "and Demo.Beta 2.0.0 ships a skill with that name", result.stderr)
+                    "managed for demo.alpha 1.0.0", result.stderr)
                 self.assertIn(
-                    "Use uninstall with --package to remove skills for the conflicting packages",
+                    "use uninstall with --package to remove the current owner's skills",
                     result.stderr,
                 )
-                self.assertEqual("", result.stdout)
-                self.assertEqual(before, snapshot(self.destination))
+                self.assertIn("copy 11 skills:" if flags else "Copied 11 skills:", result.stdout)
+                self.assertEqual("demo.alpha", self.shared_owner())
+                if flags:
+                    self.assertEqual(before, snapshot(self.destination))
+                else:
+                    self.assertEqual(["shared-skill"],
+                        self.manifest_packages()["demo.alpha"]["versions"]["1.0.0"]["skills"])
 
         self.cli("uninstall", "--package", "Demo.Alpha")
         self.cli("install", packages=packages)
         self.assertEqual("demo.beta", self.shared_owner())
-        self.assertEqual({"version": "1.1.0", "skills": ["alpha-01"]}, self.manifest_packages()["demo.alpha"])
+        self.assertEqual({"versions": {"1.1.0": {"skills": ["alpha-01"]}}}, self.manifest_packages()["demo.alpha"])
 
     def test_a_package_id_with_letters_outside_ascii_survives_later_commands(self):
         source = self.cache / "contoso.überlib" / "1.0.0" / "skills" / "uber-usage"
         source.mkdir(parents=True)
         (source / "SKILL.md").write_text("---\ndescription: Unicode package id.\n---\n", encoding="utf-8")
         self.cli("install", packages=["Contoso.Überlib@1.0.0"])
-        self.assertEqual({"contoso.überlib": {"version": "1.0.0", "skills": ["uber-usage"]}}, self.manifest_packages())
+        self.assertEqual({"contoso.überlib": {"versions": {"1.0.0": {"skills": ["uber-usage"]}}}}, self.manifest_packages())
         self.cli("install", packages=["Contoso.Überlib@1.0.0"])
         self.cli("uninstall", "--package", "Contoso.Überlib", "--dry-run")
         self.cli("uninstall", "--package", "Contoso.Überlib")
         self.assertFalse(self.manifest.exists())
         self.assertTrue((self.destination / "team-owned" / "SKILL.md").exists())
 
-    def test_install_stops_when_packages_resolve_to_more_than_one_version(self):
+    def test_colliding_versions_skip_conflicts_in_every_install_mode(self):
         newer = self.cache / "demo.alpha" / "1.1.0" / "skills" / "alpha-01"
         newer.mkdir(parents=True)
         (newer / "SKILL.md").write_text("---\ndescription: Alpha 1.1.\n---\n", encoding="utf-8")
         before = snapshot(self.destination)
-        for flags in ([], ["--dry-run"], ["-i"]):
+        packages = ["Demo.Alpha@1.0.0", "Demo.Alpha@1.1.0"]
+        for flags in (["--dry-run"], []):
             with self.subTest(mode="package", flags=flags):
                 result = self.cli(
-                    "install", *flags, packages=["Demo.Alpha@1.0.0", "Demo.Alpha@1.1.0"], expected=1)
-                self.assertIn("--package names more than one version", result.stderr)
-                self.assertIn("Demo.Alpha (1.0.0, 1.1.0)", result.stderr)
-                self.assertEqual("", result.stdout)
-                self.assertEqual(before, snapshot(self.destination))
+                    "install", *flags, packages=packages, expected=1)
+                self.assertIn("alpha-01", result.stderr)
+                self.assertIn("Demo.Alpha 1.0.0", result.stderr)
+                self.assertIn("Demo.Alpha 1.1.0", result.stderr)
+                self.assertIn("multiple versions (1.0.0, 1.1.0)", result.stdout)
+                self.assertIn("copy 14 skills:" if flags else "Copied 14 skills:", result.stdout)
+                self.assertIn("Skipped 2 colliding skills:", result.stdout)
+                if flags:
+                    self.assertEqual(before, snapshot(self.destination))
+        after = snapshot(self.destination)
+        no_new = self.cli("install", "-i", packages=packages, expected=1)
+        self.assertIn("Nothing new to install.", no_new.stdout)
+        self.assertEqual(after, snapshot(self.destination))
 
         project_file, project_xml, beta_reference, restore = self.prepare_project()
         self.cli("install")
@@ -1309,14 +1339,172 @@ class PickerRegression(unittest.TestCase):
         for flags in ([], ["--dry-run"], ["-i"]):
             with self.subTest(mode="target", flags=flags):
                 result = self.cli("install", *flags, expected=1)
-                self.assertIn("resolve to more than one version", result.stderr)
-                self.assertIn("Demo.Alpha (1.0.0, 1.1.0)", result.stderr)
-                self.assertIn("Central Package Management", result.stderr)
-                self.assertEqual("", result.stdout)
+                self.assertIn("alpha-01", result.stderr)
+                self.assertIn("Demo.Alpha 1.0.0", result.stderr)
+                self.assertIn("Demo.Alpha 1.1.0", result.stderr)
+                self.assertIn("multiple versions (1.0.0, 1.1.0)", result.stdout)
+                self.assertIn("Skipped 2 colliding skills:", result.stdout)
                 self.assertEqual(installed, snapshot(self.destination))
-        self.assertIn("  alpha-01 (Demo.Alpha 1.1.0)", self.cli("list").stdout)
+        listed = self.cli("list")
+        self.assertIn("Found 24 skills:", listed.stdout)
+        self.assertIn("alpha-01", listed.stderr)
         self.assertIn("No stale skills were found.", self.cli("uninstall", "--stale").stdout)
         self.assertEqual(installed, snapshot(self.destination))
+
+    def test_skill_free_multiversion_sdk_dependencies_do_not_block_target_install(self):
+        versions = ("8.0.31", "10.0.12", "11.0.0-rc.1.26425.128")
+        for version in versions:
+            self.add_package_skills("Microsoft.NET.ILLink.Tasks", version)
+        self.target = self.root / "App.slnx"
+        self.target.write_text("<Solution />", encoding="utf-8")
+        self.use_fake_dotnet_output({"projects": [{"frameworks": [{"topLevelPackages": [
+            {"id": "Demo.Alpha", "resolvedVersion": "1.0.0"},
+            *[{"id": "Microsoft.NET.ILLink.Tasks", "resolvedVersion": version} for version in versions],
+        ]}]}]})
+        before = snapshot(self.destination)
+
+        listed = self.cli("list")
+        self.assertIn("Found 15 skills:", listed.stdout)
+        self.assertIn("Ignored 3 packages", listed.stdout)
+        self.assertNotIn("Warning:", listed.stdout)
+        self.assertEqual("", listed.stderr)
+        preview = self.cli("install", "--dry-run")
+        self.assertIn("Would copy 15 skills:", preview.stdout)
+        self.assertEqual(before, snapshot(self.destination))
+        terminal = self.terminal().ready()
+        self.assertIn("0 of 15 selected", terminal.compact)
+        self.assertEqual(0, terminal.finish(ESC))
+        self.assertEqual(before, snapshot(self.destination))
+        result = self.cli("install")
+        self.assertIn("Copied 15 skills:", result.stdout)
+        self.assertIn("Ignored 3 packages", result.stdout)
+        self.assertEqual("", result.stderr)
+        self.assertEqual({f"alpha-{n:02}" for n in range(1, 16)}, self.installed())
+
+    def test_disjoint_versions_warn_expand_bare_ids_and_uninstall_only_one_version(self):
+        self.add_package_skills("Demo.Alpha", "2.0.0", "alpha-v2")
+        packages = ["Demo.Alpha@1.0.0", "Demo.Alpha@2.0.0"]
+        before = snapshot(self.destination)
+        preview = self.cli("install", "--dry-run", packages=packages)
+        self.assertIn("Would copy 16 skills:", preview.stdout)
+        self.assertIn("multiple versions (1.0.0, 2.0.0)", preview.stdout)
+        self.assertEqual(before, snapshot(self.destination))
+        terminal = self.terminal(packages=packages).ready()
+        self.assertIn("0 of 16 selected", terminal.compact)
+        terminal.press("a", lambda: "16 of 16 selected" in terminal.compact, "select both versions")
+        self.assertEqual(0, terminal.finish())
+        self.assert_shown("multiple versions (1.0.0, 2.0.0)", terminal)
+        self.assertEqual(["1.0.0", "2.0.0"], list(self.manifest_packages()["demo.alpha"]["versions"]))
+        self.assertEqual(["alpha-v2"], self.manifest_packages()["demo.alpha"]["versions"]["2.0.0"]["skills"])
+        installed = snapshot(self.destination)
+        self.target = self.root / "missing.slnx"
+        mixed = ["Demo.Alpha", "demo.alpha@1.0"]
+        listed = self.cli("list", packages=mixed)
+        self.assertIn("Scanned 2 packages (named explicitly).", listed.stdout)
+        self.assertIn("Found 16 skills:", listed.stdout)
+        self.cli("install", packages=mixed)
+        self.assertEqual(installed, snapshot(self.destination))
+
+        self.target.write_text("<Solution />", encoding="utf-8")
+        self.use_fake_dotnet_output({"projects": [{"frameworks": [{"topLevelPackages": [
+            {"id": "Demo.Alpha", "resolvedVersion": "1.0.0"},
+        ]}]}]})
+        stale = self.cli("uninstall", "--stale", "--dry-run")
+        self.assertIn("Would remove 1 skill:", stale.stdout)
+        self.assertIn("alpha-v2 (demo.alpha 2.0.0)", stale.stdout)
+        self.assertEqual(installed, snapshot(self.destination))
+        self.cli("uninstall", "--package", "Demo.Alpha@2.0")
+        self.assertNotIn("alpha-v2", self.installed())
+        self.assertEqual(15, len(self.installed()))
+        self.assertEqual(["1.0.0"], list(self.manifest_packages()["demo.alpha"]["versions"]))
+        self.cli("uninstall", "--package", "Demo.Alpha")
+        self.assertEqual(set(), self.installed())
+        self.assertTrue((self.destination / "team-owned" / "SKILL.md").is_file())
+
+    def test_three_way_case_only_collisions_skip_all_owners_but_install_valid_skills(self):
+        self.add_package_skills("Demo.Case", "1.0.0", "shared", "valid-a")
+        self.add_package_skills("Demo.Case", "2.0.0", "SHARED", "valid-b")
+        self.add_package_skills("Demo.Other", "1.0.0", "Shared", "valid-c")
+        packages = ["Demo.Other@1.0.0", "Demo.Case@2.0.0", "Demo.Case@1.0.0"]
+        result = self.cli("install", packages=packages, expected=1)
+        self.assertIn("Copied 3 skills:", result.stdout)
+        self.assertIn("Skipped 3 colliding skills:", result.stdout)
+        self.assertIn("multiple versions (1.0.0, 2.0.0)", result.stdout)
+        self.assertEqual(1, result.stderr.count("error:"))
+        for coordinate in ("Demo.Case 1.0.0", "Demo.Case 2.0.0", "Demo.Other 1.0.0"):
+            self.assertIn(coordinate, result.stderr)
+        self.assertEqual({"valid-a", "valid-b", "valid-c"}, self.installed())
+        self.assertFalse((self.destination / "shared").exists())
+        before = snapshot(self.destination)
+        self.cli("install", packages=list(reversed(packages)), expected=1)
+        self.assertEqual(before, snapshot(self.destination))
+
+    def test_all_colliding_input_reports_errors_without_a_picker_or_writes(self):
+        self.add_package_skills("Demo.Conflict", "1.0.0", "shared")
+        self.add_package_skills("Demo.Conflict", "2.0.0", "SHARED")
+        packages = ["Demo.Conflict@1.0.0", "Demo.Conflict@2.0.0"]
+        before = snapshot(self.destination)
+        listed = self.cli("list", packages=packages)
+        self.assertIn("Found no skills.", listed.stdout)
+        self.assertIn("shared", listed.stderr)
+        for flags in ([], ["--dry-run"], ["-i"]):
+            result = self.cli("install", *flags, packages=packages, expected=1)
+            self.assertIn("Skipped 2 colliding skills:", result.stdout)
+            self.assertIn("error:", result.stderr)
+            self.assertEqual(before, snapshot(self.destination))
+        terminal = self.terminal(packages=packages)
+        self.assertEqual(1, terminal.exit_status())
+        self.assertNotIn("Which skills should", terminal.text)
+        self.assert_shown("Skipped 2 colliding skills:", terminal)
+        self.assertEqual(before, snapshot(self.destination))
+
+    def test_a_missing_selected_version_cannot_remove_another_tracked_version(self):
+        self.add_package_skills("Demo.Alpha", "2.0.0", "alpha-v2")
+        exact = ["Demo.Alpha@1.0.0", "Demo.Alpha@2.0.0"]
+        self.cli("install", packages=exact)
+        before = snapshot(self.destination)
+        shutil.rmtree(self.cache / "demo.alpha" / "1.0.0")
+
+        for packages in (["Demo.Alpha"], exact):
+            for flags in (["--dry-run"], []):
+                with self.subTest(packages=packages, flags=flags):
+                    result = self.cli("install", *flags, packages=packages)
+                    self.assertIn("Would copy 1 skill:" if flags else "Copied 1 skill:", result.stdout)
+                    self.assertNotIn("remove", result.stdout.lower())
+                    self.assertNotIn("Ignored", result.stdout)
+                    self.assertEqual("", result.stderr)
+                    self.assertEqual(before, snapshot(self.destination))
+                    self.assertEqual(["1.0.0", "2.0.0"], list(self.manifest_packages()["demo.alpha"]["versions"]))
+                    self.assertEqual(16, len(self.installed()))
+
+    def test_partial_interactive_install_preserves_diagnostics_and_excludes_conflicts(self):
+        self.add_shared_skills()
+        before = snapshot(self.destination)
+        terminal = self.terminal().ready()
+        self.assertIn("0 of 25 selected", terminal.compact)
+        terminal.press(END, lambda: "beta-10" in terminal.focused, "last noncolliding candidate")
+        self.assertNotIn("shared-skill", terminal.text)
+        self.assertEqual(0, terminal.finish(ESC))
+        self.assert_shown("Cancelled. Nothing was copied or removed.", terminal)
+        self.assertEqual(before, snapshot(self.destination))
+
+        terminal = self.terminal("install", "--dry-run").ready()
+        terminal.press(SPACE)
+        self.assertEqual(1, terminal.finish())
+        self.assert_shown("Would copy 1 skill:", terminal)
+        self.assert_shown("Skipped 2 colliding skills:", terminal)
+        self.assertEqual(before, snapshot(self.destination))
+
+        terminal = self.terminal().ready()
+        terminal.press("a", lambda: "25 of 25 selected" in terminal.compact, "select all valid skills")
+        self.assertEqual(1, terminal.finish())
+        raw = "".join(terminal.raw)
+        self.assertIn("Copied 25 skills:", raw)
+        self.assertIn("Skipped 2 colliding skills:", raw)
+        self.assertEqual(1, raw.count("error:"))
+        self.assertEqual(set(self.names), self.installed())
+        self.assertFalse((self.destination / "shared-skill").exists())
+        self.assertTrue((self.destination / "team-owned" / "SKILL.md").is_file())
 
     def test_valid_underscore_ids_work_for_coordinate_and_uninstall_filters(self):
         for package in ("_Acme", "Acme_"):
@@ -1856,7 +2044,7 @@ class PickerRegression(unittest.TestCase):
 
     def test_invalid_manifest_metadata_cannot_inject_terminal_controls_or_change_files(self):
         self.add_shared_skills()
-        self.cli("install")
+        self.cli("install", expected=1)
         original = self.manifest.read_bytes()
         controls = (
             "\x1b]52;c;ZWNobyBleGFtcGxl\x07",
@@ -1865,7 +2053,8 @@ class PickerRegression(unittest.TestCase):
         )
         for control in controls:
             damaged = json.loads(original)
-            damaged["packages"]["demo.alpha"]["version"] += control
+            versions = damaged["packages"]["demo.alpha"]["versions"]
+            versions["1.0.0" + control] = versions.pop("1.0.0")
             self.manifest.write_text(json.dumps(damaged), encoding="utf-8")
             before = snapshot(self.destination)
             for verb, packages in (
@@ -1877,13 +2066,13 @@ class PickerRegression(unittest.TestCase):
                     self.assertEqual("", result.stdout)
                     self.assert_plain_output(result.stderr)
                     self.assertIn("Could not read the install manifest", result.stderr)
-                    self.assertIn("must be an exact NuGet version", result.stderr)
+                    self.assertIn("exact NuGet version", result.stderr)
                     self.assertNotIn("ZWNobyBleGFtcGxl", result.stderr)
                     self.assertEqual(before, snapshot(self.destination))
             self.manifest.write_bytes(original)
         result = self.cli("uninstall")
         self.assert_plain_output(result.stdout)
-        self.assertIn("Removed 26 skills", result.stdout)
+        self.assertIn("Removed 25 skills", result.stdout)
         self.assertTrue((self.destination / "team-owned" / "SKILL.md").is_file())
 
     def test_operational_errors_cannot_emit_terminal_controls(self):
