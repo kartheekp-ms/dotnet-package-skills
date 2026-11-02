@@ -449,16 +449,6 @@ class PickerRegression(unittest.TestCase):
         self.destination = ancestor / ".agents" / "skills"
         self.manifest = self.destination / ".dotnet-package-skills.json"
 
-    def scope_error(self, verb):
-        operation = "uninstall --stale" if verb == "uninstall" else verb
-        return (
-            f"Cannot {operation} using an automatically selected source and the shared skills "
-            f"destination '{self.destination}' discovered above the current directory. "
-            "The source may omit packages used by sibling projects. Pass --source with the "
-            "repository solution to compare the whole repository, or explicitly choose --source "
-            "or --destination to confirm the intended scope. No skills were changed."
-        )
-
     def test_default_destination_uses_the_nearest_top_level_git_or_solution_marker(self):
         for label, marker, nearer, expected_nearer in (
             ("git-directory", ".git", None, False),
@@ -663,55 +653,162 @@ class PickerRegression(unittest.TestCase):
         self.assertFalse((self.root / ".agents").exists())
         self.assertFalse((self.invocation / ".agents").exists())
 
-    def test_implicit_ancestor_scope_requires_acknowledgement_and_preserves_sibling_skills(self):
+    def prepare_sibling_projects(self, current_version="1.0.0"):
+        self.add_package_skills("Demo.Alpha", "2.0.0", "alpha-v2")
         project_file, project_xml, beta_reference, restore = self.prepare_project()
         (self.root / ".git").mkdir()
         self.target.unlink()
-        project_file.write_text(project_xml.replace(beta_reference, ""), encoding="utf-8")
+        project_xml = project_xml.replace(beta_reference, "").replace(
+            'Version="1.0.0"', f'Version="{current_version}"')
+        project_file.write_text(project_xml, encoding="utf-8")
         self.target = project_file
         restore()
         sibling = self.root / "Sibling" / "Sibling.csproj"
         sibling.parent.mkdir()
         sibling.write_text(
-            project_xml.replace('<PackageReference Include="Demo.Alpha" Version="1.0.0" />', ""),
+            project_xml.replace(
+                f'<PackageReference Include="Demo.Alpha" Version="{current_version}" />', beta_reference),
             encoding="utf-8",
         )
         self.target = sibling
         restore()
         self.use_discovered_destination(project_file.parent, self.root)
         self.target = None
+        return project_file, project_xml, restore
+
+    def tracked_package_state(self, package):
+        entry = self.manifest_packages()[package]
+        return entry, {
+            name: snapshot(self.destination / name)
+            for version in entry["versions"].values() for name in version["skills"]
+        }
+
+    def test_automatic_ancestor_install_updates_referenced_ids_and_preserves_sibling_skills(self):
+        project_file, project_xml, restore = self.prepare_sibling_projects("2.0.0")
         self.cli("install", packages=["Demo.Alpha@1.0.0", "Demo.Beta@2.0.0"])
         self.assertEqual(set(self.names), self.installed())
+        sibling = self.tracked_package_state("demo.beta")
         before = snapshot(self.root)
 
-        for verb, flags in (
-            ("install", []), ("install", ["--dry-run"]),
-            ("uninstall", ["--stale"]), ("uninstall", ["--stale", "--dry-run"]),
-        ):
-            with self.subTest(verb=verb, flags=flags):
-                result = self.cli(verb, *flags, packages=[], expected=1)
-                self.assertIn(self.scope_error(verb), result.stderr)
-                self.assertNotIn("Which skills should", result.stdout + result.stderr)
-                self.assertEqual(before, snapshot(self.root))
-                terminal = self.terminal(verb, *flags, packages=[])
-                self.assertEqual(1, terminal.exit_status())
-                self.assert_shown(self.scope_error(verb), terminal)
-                self.assertNotIn("Which skills should", terminal.text)
-                self.assertEqual(before, snapshot(self.root))
+        preview = self.cli("install", "--dry-run", packages=[]).stdout
+        self.assertIn("Would copy 1 skill:", preview)
+        self.assertIn("alpha-v2", preview)
+        self.assertNotIn("beta-", preview)
+        self.assertNotIn("no longer references", preview)
+        self.assertEqual(before, snapshot(self.root))
+        result = self.cli("install", packages=[]).stdout
+        self.assertIn("Copied 1 skill:", result)
+        self.assertNotIn("beta-", result)
+        self.assertNotIn("no longer references", result)
+        self.assertEqual({"alpha-v2"} | {f"beta-{number:02}" for number in range(1, 11)}, self.installed())
+        self.assertEqual(["2.0.0"], list(self.manifest_packages()["demo.alpha"]["versions"]))
+        self.assertEqual(sibling, self.tracked_package_state("demo.beta"))
 
         listed = self.cli("list", packages=[]).stdout
-        self.assertIn("alpha-01", listed)
+        self.assertIn("alpha-v2", listed)
         self.assertNotIn("beta-01", listed)
         self.assertIn("beta-01", self.cli("list", packages=["Demo.Beta"]).stdout)
+        before = snapshot(self.root)
         self.cli("install", packages=["Demo.Beta"])
         self.assertIn("Would remove 10 skills:", self.cli(
             "uninstall", "--package", "Demo.Beta", "--dry-run").stdout)
         self.assertEqual(before, snapshot(self.root))
 
+        self.cli("uninstall", "--package", "Demo.Alpha")
+        before = snapshot(self.root)
+        terminal = self.terminal("install", "--dry-run", packages=[]).ready()
+        self.assertIn("alpha-v2", terminal.focused)
+        self.assertNotIn("beta-", terminal.text)
+        terminal.press(SPACE, lambda: "1 of 1" in terminal.compact, "preview App1 installation")
+        self.assertEqual(0, terminal.finish())
+        self.assertEqual(before, snapshot(self.root))
+        terminal = self.terminal(packages=[]).ready()
+        self.assertIn("alpha-v2", terminal.focused)
+        self.assertNotIn("beta-", terminal.text)
+        terminal.press(SPACE, lambda: "1 of 1" in terminal.compact, "install App1 with sibling present")
+        self.assertEqual(0, terminal.finish())
+        self.assertEqual(sibling, self.tracked_package_state("demo.beta"))
+        self.assertEqual({"alpha-v2"} | {f"beta-{number:02}" for number in range(1, 11)}, self.installed())
+
+        project_file.write_text(project_xml.replace(
+            '<PackageReference Include="Demo.Alpha" Version="2.0.0" />', ""), encoding="utf-8")
+        self.target = project_file
+        restore()
+        self.target = None
+        before = snapshot(self.root)
+        for flags in ([], ["--dry-run"]):
+            output = self.cli("install", *flags, packages=[]).stdout
+            self.assertNotIn("no longer references", output)
+            self.assertNotIn("beta-", output)
+            self.assertEqual(before, snapshot(self.root))
+        terminal = self.terminal(packages=[])
+        self.assertEqual(0, terminal.exit_status())
+        self.assertNotIn("Which skills should", terminal.text)
+        self.assertNotIn("don't match the target", terminal.text)
+        self.assertEqual(before, snapshot(self.root))
+        self.assertFalse((self.invocation / ".agents").exists())
+
+    def test_automatic_ancestor_stale_removes_only_old_versions_of_referenced_ids(self):
+        project_file, project_xml, restore = self.prepare_sibling_projects("2.0.0")
+        self.cli("install", packages=[
+            "Demo.Alpha@1.0.0", "Demo.Alpha@2.0.0", "Demo.Beta@2.0.0"])
+        self.assertEqual(set(self.names) | {"alpha-v2"}, self.installed())
+        sibling = self.tracked_package_state("demo.beta")
+        current = snapshot(self.destination / "alpha-v2")
+        before = snapshot(self.root)
+        preview = self.cli("uninstall", "--stale", "--dry-run").stdout
+        self.assertIn("Would remove 15 skills:", preview)
+        self.assertIn("alpha-01 (demo.alpha 1.0.0)", preview)
+        self.assertNotIn("alpha-v2", preview)
+        self.assertNotIn("beta-", preview)
+        self.assertEqual(before, snapshot(self.root))
+        terminal = self.terminal("uninstall", "--stale", "--dry-run").ready()
+        self.assertIn("0 of 15 selected", terminal.compact)
+        self.assertNotIn("alpha-v2", terminal.text)
+        self.assertNotIn("beta-", terminal.text)
+        terminal.press("a")
+        self.assertEqual(0, terminal.finish())
+        self.assertEqual(before, snapshot(self.root))
+        terminal = self.terminal("uninstall", "--stale").ready()
+        self.assertIn("0 of 15 selected", terminal.compact)
+        self.assertNotIn("alpha-v2", terminal.text)
+        self.assertNotIn("beta-", terminal.text)
+        terminal.press(SPACE, lambda: "1 to remove" in terminal.compact, "remove one old App1 skill")
+        self.assertEqual(0, terminal.finish())
+        self.assertEqual((set(self.names) - {"alpha-01"}) | {"alpha-v2"}, self.installed())
+        self.assertEqual(sibling, self.tracked_package_state("demo.beta"))
+        result = self.cli("uninstall", "--stale").stdout
+        self.assertIn("Removed 14 skills:", result)
+        self.assertNotIn("beta-", result)
+        self.assertEqual(["2.0.0"], list(self.manifest_packages()["demo.alpha"]["versions"]))
+        self.assertEqual(current, snapshot(self.destination / "alpha-v2"))
+        self.assertEqual(sibling, self.tracked_package_state("demo.beta"))
+        self.assertEqual({"alpha-v2"} | {f"beta-{number:02}" for number in range(1, 11)}, self.installed())
+
+        project_file.write_text(project_xml.replace(
+            '<PackageReference Include="Demo.Alpha" Version="2.0.0" />', ""), encoding="utf-8")
+        self.target = project_file
+        restore()
+        self.target = None
+        before = snapshot(self.root)
+        for flags in ([], ["--dry-run"]):
+            self.assertIn("No stale skills were found.", self.cli("uninstall", "--stale", *flags).stdout)
+            self.assertEqual(before, snapshot(self.root))
+        terminal = self.terminal("uninstall", "--stale")
+        self.assertEqual(0, terminal.exit_status())
+        self.assertNotIn("Which skills should", terminal.text)
+        self.assert_shown("No stale skills were found.", terminal)
+        self.assertEqual(before, snapshot(self.root))
+        self.assertFalse((self.invocation / ".agents").exists())
+
+    def test_explicit_ancestor_scope_remains_authoritative_for_sibling_packages(self):
+        self.prepare_sibling_projects()
+        self.cli("install", packages=["Demo.Alpha@1.0.0", "Demo.Beta@2.0.0"])
+        before = snapshot(self.root)
         self.default_destination = False
         self.assertIn("Would remove 10 skills:", self.cli(
             "uninstall", "--stale", "--dry-run").stdout)
-        self.cli("install", "--dry-run", packages=[])
+        self.assertIn("no longer references", self.cli("install", "--dry-run", packages=[]).stdout)
         terminal = self.terminal("uninstall", "--stale", "--dry-run").ready()
         self.assertIn("0 of 10 selected", terminal.compact)
         terminal.press("a")
@@ -720,7 +817,7 @@ class PickerRegression(unittest.TestCase):
 
         self.default_destination = True
         self.target = Path(".")
-        self.cli("install", "--dry-run", packages=[])
+        self.assertIn("no longer references", self.cli("install", "--dry-run", packages=[]).stdout)
         self.assertIn("Would remove 10 skills:", self.cli(
             "uninstall", "--stale", "--dry-run").stdout)
         self.assertEqual(before, snapshot(self.root))
@@ -737,10 +834,9 @@ class PickerRegression(unittest.TestCase):
         self.assertEqual({"alpha-01"}, self.installed())
         self.assertFalse((self.invocation / ".agents").exists())
 
-    def test_implicit_ancestor_scope_fails_before_reading_a_corrupt_manifest_or_missing_source(self):
-        (self.root / ".git").mkdir()
-        self.use_discovered_destination(self.root / "no project", self.root)
-        self.destination.mkdir(parents=True)
+    def test_automatic_ancestor_install_and_stale_fail_closed_for_corrupt_manifest(self):
+        self.prepare_sibling_projects()
+        self.cli("install", packages=["Demo.Alpha@1.0.0", "Demo.Beta@2.0.0"])
         self.manifest.write_text("invalid manifest", encoding="utf-8")
         before = snapshot(self.root)
         for verb, flags in (
@@ -749,18 +845,16 @@ class PickerRegression(unittest.TestCase):
         ):
             with self.subTest(verb=verb, flags=flags):
                 result = self.cli(verb, *flags, packages=[], expected=1)
-                self.assertIn(self.scope_error(verb), result.stderr)
-                self.assertNotIn("Could not read the install manifest", result.stderr)
-                self.assertNotIn("No solution or project found", result.stderr)
+                self.assertIn("Could not read the install manifest", result.stderr)
                 self.assertEqual(before, snapshot(self.root))
         terminal = self.terminal(packages=[])
         self.assertEqual(1, terminal.exit_status())
-        self.assert_shown(self.scope_error("install"), terminal)
+        self.assert_shown("Could not read the install manifest", terminal)
         self.assertNotIn("Which skills should", terminal.text)
         self.assertEqual(before, snapshot(self.root))
 
     def test_default_destination_at_invocation_does_not_require_scope_acknowledgement(self):
-        project_file, _, _, _ = self.prepare_project()
+        project_file, project_xml, beta_reference, restore = self.prepare_project()
         self.use_discovered_destination(project_file.parent, project_file.parent)
         self.target = None
         before = snapshot(project_file.parent)
@@ -772,6 +866,19 @@ class PickerRegression(unittest.TestCase):
         self.cli("install", packages=[])
         self.assertEqual(set(self.names), self.installed())
         self.assertIn("No stale skills were found.", self.cli("uninstall", "--stale").stdout)
+        project_file.write_text(project_xml.replace(beta_reference, ""), encoding="utf-8")
+        self.target = project_file.parent / "App.slnx"
+        restore()
+        self.target = None
+        before = snapshot(project_file.parent)
+        self.assertIn("Would remove 10 skills:", self.cli("uninstall", "--stale", "--dry-run").stdout)
+        self.assertEqual(before, snapshot(project_file.parent))
+        terminal = self.terminal("uninstall", "--stale").ready()
+        self.assertIn("0 of 10 selected", terminal.compact)
+        self.assertNotIn("alpha-", terminal.text)
+        terminal.press("a")
+        self.assertEqual(0, terminal.finish())
+        self.assertEqual({f"alpha-{number:02}" for number in range(1, 16)}, self.installed())
 
     def test_unreadable_ancestor_reports_its_path_and_explicit_destination_bypasses_discovery(self):
         (self.root / ".git").mkdir()
